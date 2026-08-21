@@ -56,21 +56,30 @@ def create_national_card(person):
         image
     )
 
+    # تسک ۶۴۰: فونت از ۳۲ به ۲۲ آمد. تسرکت با ‎--psm 6‎ صفحه را یک بلوک
+    # یکدست فرض می‌کند؛ وقتی مقدارِ چاپ‌شده از برچسب‌های خودِ قالب درشت‌تر
+    # باشد سطربندی به هم می‌ریزد و ارقام تکه‌تکه خوانده می‌شوند. برچسب‌های
+    # این قالب ریزند، پس مقدار هم باید هم‌اندازهٔ آن‌ها باشد.
+    # روی ۴۵ نمونه: کد ملی ۵۱٪ → ۹۳٪ ، کل کارت ملی ۶۳٪ → ۹۲٪.
+    # ⚠️ این مقادیر باید عیناً با hana_engine/layouts.py یکی بمانند.
     font = ImageFont.truetype(
 
         str(FONT_PATH),
 
-        32
+        22
 
     )
 
 
 
+    # yها نسبت به قبل ۶ پیکسل پایین‌تر آمده‌اند تا با کوچک‌شدن فونت،
+    # مرکز نوری متن سر جای قبلی و هم‌تراز برچسب قالب بماند
+    # (PIL متن را از بالای کادرش می‌چیند، نه از خط پایه).
     draw_right_text(
         draw,
         person["national_id"],
         790,
-        142,
+        148,
         font
     )
 
@@ -79,7 +88,7 @@ def create_national_card(person):
         draw,
         person["first_name"],
         790,
-        208,
+        214,
         font
     )
 
@@ -88,7 +97,7 @@ def create_national_card(person):
         draw,
         person["last_name"],
         790,
-        270,
+        276,
         font
     )
 
@@ -97,7 +106,7 @@ def create_national_card(person):
         draw,
         person["birth_date"],
         790,
-        332,
+        338,
         font
     )
 
@@ -105,7 +114,7 @@ def create_national_card(person):
         draw,
         person["father_name"],
         790,
-        390,
+        396,
         font
     )
 
@@ -114,7 +123,7 @@ def create_national_card(person):
         draw,
         person["national_card_expire"],
         790,
-        450,
+        456,
         font
     )
 
@@ -216,6 +225,19 @@ def create_driving_license(person):
     )
 
 
+    # تسک ۶۴۰: نام تنها فیلدی است که سطر خودش را دارد؛ بقیه کنار برچسب
+    # قالب می‌نشینند. سطرِ تک‌افتاده با فونت ۳۸ در سطربندی ‎--psm 6‎ گم
+    # می‌شد و روی هر ۴۵ نمونه ۰٪ خوانده می‌شد. با ۲۸ به ۷۸٪ رسید.
+    # ⚠️ باید عیناً با hana_engine/layouts.py یکی بماند.
+    name_font = ImageFont.truetype(
+
+        str(FONT_PATH),
+
+        28
+
+    )
+
+
     full_name = (
 
             person["first_name"]
@@ -242,6 +264,7 @@ def create_driving_license(person):
     )
 
 
+    # ۸ پیکسل پایین‌تر از قبل، تا با کوچک‌شدن فونت مرکز نوری متن جابه‌جا نشود
     draw_right_text(
 
         draw,
@@ -250,9 +273,9 @@ def create_driving_license(person):
 
         1100,
 
-        480,
+        488,
 
-        font
+        name_font
 
     )
 
