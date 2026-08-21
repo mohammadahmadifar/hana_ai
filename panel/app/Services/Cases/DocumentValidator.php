@@ -47,6 +47,9 @@ final class DocumentValidator
     /** فقط این دو حوزه مال این کلاس است؛ scope=file مال تسک ۶۳۰ است و دست نمی‌خورد. */
     private const OWNED_SCOPES = ['document', 'cross'];
 
+    /** طول ستون validation_results.rule_key — بلندتر از این روی MySQL insert را می‌ترکاند. */
+    private const RULE_KEY_MAX = 60;
+
     /**
      * کدام وضعیت‌ها در هر حوزه ردیف می‌گیرند.
      *
@@ -869,7 +872,7 @@ final class DocumentValidator
     ): array {
         return [
             'scope' => $scope,
-            'rule_key' => $ruleKey,
+            'rule_key' => $this->clipRuleKey($ruleKey),
             'status' => $status,
             'message_fa' => $this->clip(PersianValue::normalize($message)),
             'details' => $details,
@@ -881,6 +884,36 @@ final class DocumentValidator
     private function clip(string $message): string
     {
         return mb_strlen($message) <= 255 ? $message : mb_substr($message, 0, 254).'…';
+    }
+
+    /**
+     * کلید قاعده، بریده به اندازهٔ ستون validation_results.rule_key.
+     *
+     * چرا لازم است: پیشوند «document.missing_required.» ۲۶ نویسه است و
+     * document_types.key تا ۴۰ نویسه مجاز است، پس کلید تا ۶۶ نویسه می‌رسد —
+     * بلندتر از ستون ۶۰ نویسه‌ای. روی MySQL این یعنی
+     * «Data too long for column 'rule_key'» و کل مرحلهٔ اعتبارسنجی پرونده
+     * نیمه‌کاره رها می‌شود؛ روی sqlite حافظه‌ایِ تست‌ها طول varchar نادیده
+     * گرفته می‌شود و ایراد ساکت می‌ماند.
+     *
+     * برشِ ساده کافی نیست: دو نوع مدرک که ۳۴ نویسهٔ اولِ کلیدشان یکی است به یک
+     * rule_key تبدیل می‌شدند، updateOrCreate دو بررسی متفاوت را روی هم
+     * می‌نوشت و پاک‌سازی ردیف بیات هم بی‌خود ردیف زنده را حذف می‌کرد. پس هشت
+     * نویسه از sha1 کلید کامل ته آن می‌آید: خروجی برای هر ورودی یکتاست و
+     * بین اجراها هم پایدار می‌ماند (شرط idempotent بودن persist).
+     *
+     * پیشوند دست‌نخورده می‌ماند تا حوزهٔ بررسی همچنان از روی خود کلید خوانده
+     * شود (صفحهٔ گزارش‌ها با explode('.') همین کار را می‌کند).
+     */
+    private function clipRuleKey(string $ruleKey): string
+    {
+        if (mb_strlen($ruleKey) <= self::RULE_KEY_MAX) {
+            return $ruleKey;
+        }
+
+        $suffix = '.'.substr(sha1($ruleKey), 0, 8);
+
+        return mb_substr($ruleKey, 0, self::RULE_KEY_MAX - mb_strlen($suffix)).$suffix;
     }
 
     /**

@@ -267,6 +267,89 @@ class CaseScorerTest extends TestCase
         $this->assertSame(3, ScoreComponent::query()->where('case_id', $case->id)->count());
     }
 
+    /**
+     * «اثرگذارترین مؤلفه» باید بر پایهٔ سهمِ ازدست‌رفته انتخاب شود، نه مقدار خام.
+     *
+     * وزن‌ها برابر نیستند (۴۰/۴۰/۲۰). این پرونده کیفیت OCR ۵۵ دارد (وزن ۴۰ →
+     * ۱۸ امتیاز از ۱۰۰ کم می‌کند) و کامل بودن مدارک ۳۳ (وزن ۲۰ → کمتر از ۱۴
+     * امتیاز). مرتب‌سازی روی مقدار خام، «کامل بودن مدارک» را اثرگذارترین
+     * می‌نامید و کارشناس را می‌فرستاد سراغ گرفتن مدرک اضافه، در حالی که مشکل
+     * اصلی کیفیت تصویرهاست.
+     */
+    public function test_driver_component_is_the_one_that_lost_the_most_points(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        // دو مدرک از سه مدرک نیامده‌اند: کامل بودن پایین می‌آید ولی وزنش نصف است
+        $case->documents()
+            ->whereIn('document_type_id', [
+                $this->documentTypeId('driving_license'),
+                $this->documentTypeId('vehicle_card'),
+            ])
+            ->delete();
+
+        $case = $case->fresh(['documents']);
+
+        $this->fillRequiredFields($case, 55.0);
+
+        $case = $this->runScorer($case);
+
+        $rows = $case->scoreComponents()->get()->keyBy('component_key');
+
+        // پیش‌شرط سناریو: مقدار خامِ «کامل بودن» کمتر است ولی امتیاز کمتری هم می‌گیرد
+        $this->assertLessThan((float) $rows['ocr_quality']->value, (float) $rows['completeness']->value);
+        $this->assertGreaterThan(
+            (float) $rows['completeness']->weight - (float) $rows['completeness']->contribution,
+            (float) $rows['ocr_quality']->weight - (float) $rows['ocr_quality']->contribution,
+        );
+
+        $reason = (string) $case->decision_reason;
+
+        $this->assertStringContainsString(
+            'اثرگذارترین مؤلفه: «'.CaseScorer::COMPONENT_LABELS['ocr_quality'].'»',
+            $reason,
+        );
+        $this->assertStringNotContainsString(CaseScorer::COMPONENT_LABELS['completeness'], $reason);
+
+        // و بگوید چند امتیاز کم کرده، وگرنه کارشناس نمی‌فهمد چرا این یکی مهم‌تر است
+        $this->assertStringContainsString('امتیاز از ۱۰۰ کم کرده است', $reason);
+    }
+
+    /**
+     * فیلدی که کارشناس دستی اصلاح کرده نباید «ضعیف‌ترین خواندن» معرفی شود.
+     *
+     * همان یادداشت، فیلد دستی را «قطعی» و ۱۰۰ حساب می‌کند؛ اگر انتخابِ
+     * ضعیف‌ترین روی confidence خام باشد، یک جمله دو معیار متضاد را کنار هم
+     * می‌گذارد و کارشناس سراغ فیلدی می‌رود که همین حالا هم درست است.
+     */
+    public function test_weakest_field_in_the_ocr_note_ignores_manually_corrected_fields(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+        $vehicleId = (int) $case->documents
+            ->firstWhere('document_type_id', $this->documentTypeId('vehicle_card'))->id;
+
+        // «شماره پلاک» را کارشناس دستی نوشته؛ عدد خامش پایین مانده ولی قطعی است
+        $this->addField($case, $vehicleId, 'plate_number', 31.3, 'manual');
+        $this->addField($case, $vehicleId, 'vin', 40.0);
+        $this->addField($case, $vehicleId, 'national_id', 90.0);
+
+        $case = $this->runScorer($case);
+
+        $note = (string) $case->scoreComponents()->where('component_key', 'ocr_quality')->value('note_fa');
+
+        $this->assertStringContainsString('ضعیف‌ترین: «شماره شاسی» با ۴۰٫۰', $note);
+        $this->assertStringNotContainsString('شماره پلاک', $note);
+        $this->assertStringContainsString('۱ فیلد زیر ۵۰ خوانده شده', $note);
+        $this->assertStringContainsString('۱ فیلد را کارشناس دستی اصلاح کرده', $note);
+
+        // فیلد دستی ۱۰۰ حساب می‌شود، پس میانگین (۱۰۰+۴۰+۹۰)÷۳ است نه (۳۱٫۳+۴۰+۹۰)÷۳
+        $this->assertEqualsWithDelta(
+            76.67,
+            (float) $case->scoreComponents()->where('component_key', 'ocr_quality')->value('value'),
+            0.01,
+        );
+    }
+
     // ——— ابزار داخلی تست ———
 
     private function runScorer(PermitCase $case): PermitCase
@@ -298,6 +381,25 @@ class CaseScorerTest extends TestCase
                 ]);
             }
         }
+    }
+
+    /** یک ردیف extracted_fields با اطمینان و منبع دلخواه. */
+    private function addField(
+        PermitCase $case,
+        int $documentId,
+        string $fieldKey,
+        float $confidence,
+        string $source = 'ocr',
+    ): void {
+        ExtractedField::create([
+            'case_id' => $case->id,
+            'case_document_id' => $documentId,
+            'field_key' => $fieldKey,
+            'raw_value' => 'مقدار آزمایشی',
+            'normalized_value' => 'مقدار آزمایشی',
+            'confidence' => $confidence,
+            'source' => $source,
+        ]);
     }
 
     private function addResult(

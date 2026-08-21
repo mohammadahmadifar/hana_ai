@@ -267,6 +267,9 @@ final class CaseScorer
      * میانگین confidence فیلدهای استخراج‌شده. فیلدی که کارشناس دستی اصلاح کرده
      * (source=manual) قطعی است و ۱۰۰ حساب می‌شود، چون دیگر خروجی ماشین نیست.
      *
+     * همین قاعده روی «ضعیف‌ترینِ» یادداشت هم اعمال می‌شود تا یک یادداشت دو
+     * معیار متضاد را کنار هم نگذارد.
+     *
      * @return array{key: string, value: float, note: string}
      */
     private function ocrQuality(PermitCase $case): array
@@ -282,25 +285,33 @@ final class CaseScorer
             ];
         }
 
-        $confidences = $fields->map(
-            fn (ExtractedField $field) => $field->source === 'manual'
-                ? 100.0
-                : self::clamp((float) $field->confidence),
-        );
+        // «اطمینان مؤثر»: همان عددی که واقعاً در میانگین می‌نشیند. فیلدی که کارشناس
+        // دستی اصلاح کرده ۱۰۰ است. ضعیف‌ترین فیلد هم باید روی همین عدد انتخاب شود
+        // نه روی confidence خام، وگرنه یادداشت خودش را نقض می‌کند: فیلدی که جملهٔ
+        // آخر «قطعی حساب شد» می‌نامد، در جملهٔ وسط «ضعیف‌ترین با ۳۱٫۳» معرفی می‌شود
+        // و کارشناس سراغ فیلدی می‌رود که همین حالا هم درست است.
+        $measured = $fields->map(fn (ExtractedField $field): array => [
+            'field' => $field,
+            'confidence' => $field->source === 'manual' ? 100.0 : self::clamp((float) $field->confidence),
+        ])->values();
 
-        $average = round($confidences->avg(), 2);
-        $weak = $fields->sortBy(fn (ExtractedField $field) => (float) $field->confidence)->first();
+        $average = round((float) $measured->avg('confidence'), 2);
+        $weakest = $measured->sortBy('confidence')->first();
         $labels = self::fieldLabels();
 
         $note = 'میانگین اطمینان OCR روی '.self::fa($fields->count()).' فیلد استخراج‌شده برابر '
             .PersianValue::decimal($average, 1).' از ۱۰۰ است.';
 
-        $lowCount = $confidences->filter(fn (float $c) => $c < 50)->count();
+        $lowCount = $measured->where('confidence', '<', 50.0)->count();
 
-        if ($lowCount > 0 && $weak !== null) {
+        // چون شمارش و انتخاب هر دو روی اطمینان مؤثرند، وقتی lowCount>0 است
+        // ضعیف‌ترین حتماً یکی از همان فیلدهای زیر ۵۰ است و هرگز فیلد دستی نیست.
+        if ($lowCount > 0 && $weakest !== null) {
+            $weak = $weakest['field'];
+
             $note .= ' '.self::fa($lowCount).' فیلد زیر ۵۰ خوانده شده؛ ضعیف‌ترین: «'
                 .($labels[$weak->field_key] ?? $weak->field_key).'» با '
-                .PersianValue::decimal((float) $weak->confidence, 1).'.';
+                .PersianValue::decimal((float) $weakest['confidence'], 1).'.';
         }
 
         $manual = $fields->where('source', 'manual')->count();
@@ -531,17 +542,45 @@ final class CaseScorer
         ];
     }
 
-    /** ضعیف‌ترین مؤلفه — همان جمله‌ای که کارشناس اول از همه دنبالش می‌گردد. */
+    /**
+     * اثرگذارترین مؤلفه — همان جمله‌ای که کارشناس اول از همه دنبالش می‌گردد.
+     *
+     * معیار «سهمِ ازدست‌رفته» است، نه کمترین مقدار خام. وزن‌ها برابر نیستند
+     * (پیش‌فرض ۴۰/۴۰/۲۰)، پس مؤلفه‌ای با مقدار ۵۵ و وزن ۴۰ هجده امتیاز از ۱۰۰
+     * کم می‌کند ولی مؤلفه‌ای با مقدار ۵۰ و وزن ۲۰ فقط ده امتیاز. مرتب‌سازی روی
+     * value دومی را «اثرگذارترین» می‌نامید و کارشناس را می‌فرستاد سراغ گرفتن
+     * مدرک اضافه، در حالی که مشکل اصلی کیفیت تصویرها بود.
+     *
+     * سهم ازدست‌رفته = weight × (۱۰۰ − value) ÷ ۱۰۰ = weight − contribution.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     */
     private function driverText(array $rows): string
     {
-        $weakest = collect($rows)->sortBy('value')->first();
+        $driver = null;
+        $lost = 0.0;
 
-        if ($weakest === null) {
+        foreach ($rows as $row) {
+            $rowLost = round((float) $row['weight'] - (float) $row['contribution'], 2);
+
+            if ($driver === null || $rowLost > $lost) {
+                $driver = $row;
+                $lost = $rowLost;
+            }
+        }
+
+        if ($driver === null) {
             return '';
         }
 
-        return 'اثرگذارترین مؤلفه: «'.$weakest['label_fa'].'» با مقدار '
-            .PersianValue::decimal((float) $weakest['value'], 1).' از ۱۰۰.';
+        // پروندهٔ بی‌نقص: هیچ مؤلفه‌ای امتیازی نگرفته، پس «اثرگذارترین» بی‌معنی است.
+        if ($lost <= 0.0) {
+            return 'هیچ مؤلفه‌ای از امتیاز کم نکرد؛ همهٔ مؤلفه‌ها مقدار کامل دارند.';
+        }
+
+        return 'اثرگذارترین مؤلفه: «'.$driver['label_fa'].'» با مقدار '
+            .PersianValue::decimal((float) $driver['value'], 1).' از ۱۰۰، که '
+            .PersianValue::decimal($lost, 1).' امتیاز از ۱۰۰ کم کرده است.';
     }
 
     /** خلاصهٔ حداکثر سه بررسی ناموفق، برای یادداشت و دلیل تصمیم. */

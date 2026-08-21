@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\CaseDocument;
+use App\Models\DocumentType;
+use App\Models\DocumentTypeField;
 use App\Models\ExtractedField;
 use App\Models\PermitCase;
 use App\Models\Setting;
@@ -565,8 +567,127 @@ class DocumentValidatorTest extends TestCase
     }
 
     // ------------------------------------------------------------------
+    // طول کلید قاعده — ستون rule_key فقط ۶۰ نویسه جا دارد
+    // ------------------------------------------------------------------
+
+    /**
+     * نوع مدرکی با کلید بلند نباید insert را بترکاند.
+     *
+     * پیشوند «document.missing_required.» ۲۶ نویسه است و document_types.key
+     * تا ۴۰ نویسه مجاز است، یعنی کلید تا ۶۶ نویسه می‌رسد در حالی که ستون
+     * validation_results.rule_key فقط varchar(60) است. روی MySQL این یعنی
+     * «Data too long for column 'rule_key'» و کل مرحلهٔ اعتبارسنجی نیمه‌کاره
+     * می‌ماند؛ روی sqlite تست‌ها طول varchar نادیده گرفته می‌شود، برای همین
+     * این‌جا خود طول را ادعا می‌کنیم نه صرفاً «کرش نکردن» را.
+     */
+    public function test_long_document_type_key_does_not_overflow_the_rule_key_column(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+        $this->addLongKeyDocument($case, 'commercial_transport_permit_renewal_a');
+        $this->extract($case, $this->data());
+
+        (new DocumentValidator)->validate($case);
+
+        $rows = ValidationResult::query()->where('case_id', $case->id)->get();
+
+        $this->assertNotEmpty($rows);
+
+        foreach ($rows as $row) {
+            $this->assertLessThanOrEqual(
+                60,
+                mb_strlen((string) $row->rule_key),
+                'کلید قاعده «'.$row->rule_key.'» از ستون varchar(60) بیرون می‌زند.',
+            );
+        }
+    }
+
+    /**
+     * برشِ کلید نباید دو بررسی متفاوت را روی هم بیندازد.
+     *
+     * دو نوع مدرک که ۳۴ نویسهٔ اولِ کلیدشان یکی است، با برش سادهٔ ۶۰ نویسه‌ای
+     * به یک rule_key می‌رسیدند؛ آن‌وقت updateOrCreate دومی را روی اولی
+     * می‌نوشت و کارشناس فقط یکی از دو مدرک را در نتیجه می‌دید.
+     */
+    public function test_two_long_keys_with_the_same_prefix_stay_two_separate_rules(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+        $first = $this->addLongKeyDocument($case, 'commercial_transport_permit_renewal_a');
+        $second = $this->addLongKeyDocument($case, 'commercial_transport_permit_renewal_b');
+        $this->extract($case, $this->data());
+
+        $validator = new DocumentValidator;
+        $validator->validate($case);
+
+        $keyOf = fn (int $documentId): ?string => ValidationResult::query()
+            ->where('case_id', $case->id)
+            ->where('case_document_id', $documentId)
+            ->where('scope', 'document')
+            ->where('rule_key', 'like', 'document.missing_required.%')
+            ->value('rule_key');
+
+        $firstKey = $keyOf($first);
+        $secondKey = $keyOf($second);
+
+        $this->assertNotNull($firstKey, 'بررسی مدرک اول گم شده — احتمالاً روی کلید مدرک دوم نوشته شده است.');
+        $this->assertNotNull($secondKey, 'بررسی مدرک دوم گم شده — احتمالاً روی کلید مدرک اول نوشته شده است.');
+        $this->assertNotSame($secondKey, $firstKey, 'دو نوع مدرک متفاوت نباید یک کلید قاعده بگیرند.');
+
+        // و اجرای دوباره نه ردیف تکراری بسازد نه یکی از این دو را «بیات» ببیند
+        $validator->validate($case);
+
+        $this->assertSame($firstKey, $keyOf($first), 'کلید کوتاه‌شده باید بین اجراها پایدار بماند.');
+        $this->assertSame($secondKey, $keyOf($second));
+        $this->assertSame(
+            2,
+            ValidationResult::query()
+                ->where('case_id', $case->id)
+                ->where('scope', 'document')
+                ->where('rule_key', 'like', 'document.missing_required.%')
+                ->whereIn('case_document_id', [$first, $second])
+                ->count(),
+        );
+    }
+
+    // ------------------------------------------------------------------
     // ابزار تست
     // ------------------------------------------------------------------
+
+    /**
+     * یک نوع مدرکِ تازه با کلید بلند، وصل‌شده به خدمت پرونده و بارگذاری‌شده روی آن.
+     *
+     * خروجی: شناسهٔ case_documents همان مدرک.
+     */
+    private function addLongKeyDocument(PermitCase $case, string $key): int
+    {
+        $type = DocumentType::create([
+            'key' => $key,                       // ۳۷ نویسه — مجاز است، چون ستون ۴۰ نویسه دارد
+            'label_fa' => 'مجوز حمل بار برون‌شهری',
+            'is_generatable' => false,
+            'is_active' => true,
+            'sort' => 90,
+        ]);
+
+        DocumentTypeField::create([
+            'document_type_id' => $type->id,
+            'key' => 'permit_number',
+            'label_fa' => 'شماره مجوز',
+            'value_type' => 'digits',
+            'is_required' => true,
+            'is_cross_checked' => false,
+            'sort' => 1,
+        ]);
+
+        $case->serviceType->documentTypes()->attach($type->id, ['is_required' => true, 'sort' => 90]);
+
+        $document = CaseDocument::factory()->prechecked()->create([
+            'case_id' => $case->id,
+            'document_type_id' => $type->id,
+        ]);
+
+        $case->load(['documents.documentType.fields', 'serviceType.documentTypes.fields']);
+
+        return (int) $document->id;
+    }
 
     /**
      * مقادیر پایه با تغییرات دلخواه.
