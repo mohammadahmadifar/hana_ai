@@ -14,6 +14,8 @@ Route::get('/', function () {
     return redirect()->route(auth()->check() ? 'dashboard' : 'login');
 });
 
-foreach (['auth', 'panel', 'dataset', 'testimage', 'cases', 'dashboard'] as $area) {
-    require __DIR__."/areas/{$area}.php";
+// هر بخش فایل روت خودش را در routes/areas/ می‌گذارد و همه خودکار بارگذاری می‌شوند.
+// این‌طوری برای افزودن یک صفحه هیچ‌کس لازم نیست این فایل را دست بزند.
+foreach (glob(__DIR__.'/areas/*.php') as $areaFile) {
+    require $areaFile;
 }

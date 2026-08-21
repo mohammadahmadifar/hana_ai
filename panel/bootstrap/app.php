@@ -17,6 +17,11 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
         $middleware->redirectGuestsTo('/login');
+
+        // نگهبان «حساب فعال» روی همه روت‌های web: کاربری که وسط نشست غیرفعال
+        // می‌شود باید بلافاصله بیرون بیفتد، نه اینکه تا انقضای نشست دسترسی داشته باشد.
+        // EnsureRole بدون آرگومان مهمان‌ها را دست‌نخورده رد می‌کند، پس حلقه ریدایرکت نمی‌سازد.
+        $middleware->appendToGroup('web', \App\Http\Middleware\EnsureRole::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
