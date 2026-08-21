@@ -49,16 +49,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.config.settings import FONT_PATH, TESSERACT_CMD
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-image_path = (
-        PROJECT_ROOT /
-        "dataset" /
-        "preprocessed" /
-        "vehicle_card" /
-        "016_brightness.png"
-)
-
 pytesseract.pytesseract.tesseract_cmd = (
     TESSERACT_CMD
 )
@@ -988,7 +978,12 @@ def extract_vin(vin_image):
 
 # ---------------------------------------------------
 
-def save_debug_image(binary, boxes, path="debug_segments.png"):
+def save_debug_image(binary, boxes, path):
+    """کادر هر تکه را روی تصویر دودویی می‌کشد و در «path» ذخیره می‌کند.
+
+    فقط ابزار عیب‌یابی دستی است. مسیر عمداً پیش‌فرض ندارد تا هیچ فراخوانی
+    ناخواسته‌ای در پوشهٔ کاری سرور فایل ننویسد.
+    """
     debug = cv2.cvtColor(
         binary,
         cv2.COLOR_GRAY2BGR
@@ -1015,7 +1010,16 @@ def save_debug_image(binary, boxes, path="debug_segments.png"):
 # ---------------------------------------------------
 
 
-def vehicle_card_ocr(image_path):
+def vehicle_card_ocr(image_path, debug_path=None):
+    """VIN و شمارهٔ پلاک را از تصویر کارت مالکیت می‌خواند.
+
+    خروجی: تاپل (vin_text, plate_text).
+
+    این تابع هیچ چیزی چاپ نمی‌کند و هیچ فایلی نمی‌نویسد؛ پل موتور
+    (hana_engine) آن را برای هر درخواست پنل صدا می‌زند و نباید در پوشهٔ
+    کاری سرور اثری بگذارد. برای عیب‌یابی دستی «debug_path» را بدهید تا
+    تصویر تکه‌بندی‌شده همان‌جا ذخیره شود.
+    """
     image = cv2.imread(
         str(image_path)
     )
@@ -1037,9 +1041,8 @@ def vehicle_card_ocr(image_path):
         read_plate(binary, boxes)
     )
 
-    print(f"Plate : {plate_text}")
-
-    save_debug_image(binary, boxes)
+    if debug_path is not None:
+        save_debug_image(binary, boxes, debug_path)
 
     return vin_text, plate_text
 
@@ -1047,6 +1050,48 @@ def vehicle_card_ocr(image_path):
 # ---------------------------------------------------
 
 if __name__ == "__main__":
-    vin, plate = vehicle_card_ocr(
-        str(image_path)
+    # اجرای دستی برای عیب‌یابی:
+    #   python -m app.ocr.vehicle_card_ocr [مسیر تصویر] [مسیر تصویر عیب‌یابی]
+    # پیش‌فرضِ تصویر، یکی از نمونه‌های پیش‌پردازش‌شدهٔ مخزن است و تصویر
+    # تکه‌بندی در پوشهٔ کاری جاری نوشته می‌شود (در .gitignore هست).
+    import sys
+
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+    SAMPLE_FOLDER = (
+            PROJECT_ROOT /
+            "dataset" /
+            "preprocessed" /
+            "vehicle_card"
     )
+
+    if len(sys.argv) > 1:
+
+        sample_path = Path(sys.argv[1])
+
+    else:
+
+        samples = sorted(SAMPLE_FOLDER.glob("*.png"))
+
+        if not samples:
+            raise SystemExit(
+                f"نمونه‌ای در {SAMPLE_FOLDER} نیست. "
+                f"اول «python main.py» را اجرا کنید یا مسیر تصویر را "
+                f"به‌عنوان آرگومان بدهید."
+            )
+
+        sample_path = samples[0]
+
+    debug_path = (
+        Path(sys.argv[2])
+        if len(sys.argv) > 2
+        else Path("debug_segments.png")
+    )
+
+    vin, plate = vehicle_card_ocr(
+        str(sample_path),
+        debug_path=debug_path
+    )
+
+    print(f"VIN   : {vin}")
+    print(f"Plate : {plate}")

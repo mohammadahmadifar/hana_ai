@@ -12,6 +12,8 @@
 ```bash
 # موتور به‌تنهایی (پایپ‌لاین اصلی پایان‌نامه)
 .venv/bin/python main.py
+.venv/bin/python main.py --number 10   # ده شخص تازه؛ فقط نمونه‌های جدید پردازش می‌شوند
+.venv/bin/python main.py --all         # پردازش کامل از نو (وقتی الگوریتم عوض شده)
 
 # پنل
 cd panel && php artisan migrate --force && php artisan db:seed --force
