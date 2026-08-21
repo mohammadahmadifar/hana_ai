@@ -1,0 +1,66 @@
+# ---------------------------------------------
+# خروجی‌های تولیدشده توسط خود برنامه
+# با اجرای main.py دوباره ساخته می‌شوند
+# ---------------------------------------------
+
+# تصاویر چاپ‌شده روی قالب  (image_writer.py)
+dataset/generated/
+
+# تصاویر با اعوجاج عمدی  (image_processing.py)
+dataset/processed/
+
+# تصاویر پیش‌پردازش‌شده  (image_preprocessing.py)
+dataset/preprocessed/
+
+# متن استخراج‌شده  (ocr_engine.py)
+dataset/ocr_results/
+
+# لیبل‌های JSON  (label_generator.py)
+dataset/labels/
+
+# تصاویر دیباگ سگمنت پلاک  (vehicle_card_ocr.py)
+debug_segments.png
+**/debug_segments.png
+
+
+# ---------------------------------------------
+# پایتون
+# ---------------------------------------------
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+.Python
+build/
+dist/
+*.egg-info/
+
+# محیط مجازی
+venv/
+.venv/
+env/
+ENV/
+
+
+# ---------------------------------------------
+# ابزارها و ویرایشگرها
+# ---------------------------------------------
+
+.idea/
+.vscode/
+*.swp
+
+.pytest_cache/
+.mypy_cache/
+
+
+# ---------------------------------------------
+# سیستم‌عامل
+# ---------------------------------------------
+
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
