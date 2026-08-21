@@ -7,13 +7,16 @@ use App\Models\PermitCase;
 use App\Models\ServiceType;
 use App\Models\User;
 use App\Services\HanaEngine;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use League\Flysystem\UnableToCreateDirectory;
 use Mockery\MockInterface;
 use Tests\Concerns\BuildsCases;
 use Tests\TestCase;
+use Throwable;
 
 /**
  * تسک ۶۲۹ — ویزارد «انتخاب نوع خدمت و دریافت مدارک».
@@ -246,6 +249,81 @@ class CaseWizardTest extends TestCase
         // و پرونده ناقص می‌ماند
         $this->actingAs($user)->post(route('cases.submit', $case))->assertSessionHas('error');
         $this->assertSame('draft', $case->refresh()->status);
+    }
+
+    // ==================================================================
+    // دیسکی که نمی‌شود روی آن نوشت
+    // ==================================================================
+
+    /**
+     * سناریوی واقعیِ پروداکشن: پوشهٔ `storage/app/private/documents/cases`
+     * مالکش root با مجوز 0700 بود و php-fpm (www-data) نمی‌توانست زیرپوشهٔ
+     * پرونده را بسازد. `putFileAs` استثنای UnableToCreateDirectory پرتاب
+     * می‌کرد، `'throw' => false` دیسک آن را نمی‌گرفت و کاربر صفحهٔ ۵۰۰
+     * انگلیسی می‌دید. هر سه POST بارگذاری مدرک با ۵۰۰ می‌افتاد.
+     */
+    public function test_a_disk_that_cannot_be_written_shows_a_persian_message_not_a_500(): void
+    {
+        $user = $this->expertUser();
+        $case = $this->createCase($user, 'issue');
+
+        $this->breakDocumentsDisk(
+            UnableToCreateDirectory::atLocation('cases/'.$case->id, 'mkdir(): Permission denied'),
+        );
+
+        $response = $this->upload($user, $case, 'national_card');
+
+        $response->assertRedirect();
+        $response->assertSessionHas('error');
+
+        $message = (string) session('error');
+
+        // پیام باید بگوید «چه شد» و «کاربر چه کند» — نه فقط «خطا رخ داد».
+        $this->assertStringContainsString('کارت ملی', $message);
+        $this->assertStringContainsString('ذخیره نشد', $message);
+        // پیام باید دقیقاً همین علت را نام ببرد، نه یک «خطای عمومی».
+        $this->assertStringContainsString('پوشهٔ نگهداری مدارک', $message);
+        $this->assertStringContainsString('مدیر سامانه', $message);
+        $this->assertStringContainsString('کد پیگیری', $message);
+        $this->assertMatchesRegularExpression('/[A-Z0-9]{6}/', $message, 'کد پیگیری باید در پیام بیاید.');
+        $this->assertDoesNotMatchRegularExpression('/Unable to|Flysystem|Exception/i', $message);
+
+        // و هیچ رکورد نصفه‌نیمه‌ای در دیتابیس نمی‌ماند.
+        $this->assertSame(0, $case->documents()->count());
+        $this->assertSame('draft', $case->refresh()->status);
+    }
+
+    public function test_a_silent_write_failure_is_also_reported_in_persian(): void
+    {
+        $user = $this->expertUser();
+        $case = $this->createCase($user, 'issue');
+
+        // مسیر دوم: خودِ لاراول به‌خاطر 'throw' => false استثنا را می‌خورد و
+        // false برمی‌گرداند. کاربر آن‌جا هم باید همان پیام روشن را بگیرد.
+        $this->breakDocumentsDisk(null);
+
+        $this->upload($user, $case, 'national_card')
+            ->assertRedirect()
+            ->assertSessionHas('error');
+
+        $this->assertStringContainsString('ذخیره نشد', (string) session('error'));
+        $this->assertSame(0, $case->documents()->count());
+    }
+
+    /**
+     * دیسک `documents` را با یک دیسک خراب عوض می‌کند.
+     *
+     * @param  Throwable|null  $failure  استثنایی که putFileAs پرتاب کند؛ null یعنی false برگرداند
+     */
+    private function breakDocumentsDisk(?Throwable $failure): void
+    {
+        $broken = \Mockery::mock(Filesystem::class);
+
+        $expectation = $broken->shouldReceive('putFileAs');
+
+        $failure === null ? $expectation->andReturn(false) : $expectation->andThrow($failure);
+
+        Storage::set('documents', $broken);
     }
 
     // ==================================================================

@@ -13,8 +13,12 @@ use App\Support\PersianValue;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use League\Flysystem\UnableToCreateDirectory;
+use League\Flysystem\UnableToWriteFile;
+use Throwable;
 
 /**
  * گرفتن مدارک یک پرونده: بارگذاری، جایگزینی، حذف.
@@ -34,6 +38,11 @@ use Illuminate\Support\Str;
  *     `DocumentPrecheck` (تسک ۶۳۰) فایل را بازرسی می‌کند و اگر ردش کرد،
  *     پیام و راهنمایش به کاربر نشان داده می‌شود تا **فایل را جایگزین کند**.
  *     این‌جا فقط یک سقف حجم به‌عنوان محافظ دیسک بررسی می‌شود.
+ *
+ *  ۴) **هیچ خطای نوشتن روی دیسک به صفحهٔ ۵۰۰ ختم نمی‌شود.** هر شکستِ ذخیره
+ *     (مجوز پوشه، پر شدن دیسک، مسیر گم‌شده) به پیام فارسیِ «چه شد و چه کنم»
+ *     تبدیل می‌شود و جزئیات فنی با یک کد پیگیری در لاگ می‌ماند —
+ *     `diskWriteFailed()`.
  */
 class CaseDocumentController extends Controller
 {
@@ -89,15 +98,20 @@ class CaseDocumentController extends Controller
         /** @var UploadedFile $file */
         $file = $request->file('file');
 
-        $path = Storage::disk(self::DISK)->putFileAs(
-            'cases/'.$case->id,
-            $file,
-            $this->safeFileName($type, $file),
-        );
+        $path = null;
 
-        if ($path === false || $path === null) {
-            return back()->with('error', 'ذخیرهٔ فایل روی سرور انجام نشد. '
-                .'یک بار دیگر تلاش کنید؛ اگر باز هم تکرار شد به مدیر سامانه اطلاع دهید.');
+        try {
+            $path = Storage::disk(self::DISK)->putFileAs(
+                'cases/'.$case->id,
+                $file,
+                $this->safeFileName($type, $file),
+            );
+        } catch (Throwable $failure) {
+            return back()->with('error', $this->diskWriteFailed($request, $case, $type, $failure));
+        }
+
+        if (! is_string($path) || $path === '') {
+            return back()->with('error', $this->diskWriteFailed($request, $case, $type, null));
         }
 
         $document = $this->attachDocument($case, $type, $file, $path);
@@ -272,6 +286,62 @@ class CaseDocumentController extends Controller
         $name = PersianValue::normalize($file->getClientOriginalName());
 
         return mb_substr($name, 0, 120) ?: 'بدون‌نام';
+    }
+
+    // ==================================================================
+    // شکست نوشتن روی دیسک
+    // ==================================================================
+
+    /**
+     * نوشتن فایل روی دیسک `documents` نشد — پیام فارسی بساز و جزئیات فنی را لاگ کن.
+     *
+     * چرا این متد لازم است: `putFileAs` وقتی پوشهٔ مقصد ساخته نشود
+     * `League\Flysystem\UnableToCreateDirectory` **پرتاب** می‌کند. تنظیم
+     * `'throw' => false` دیسک آن را نمی‌گیرد، چون `FilesystemAdapter::put()`
+     * فقط `UnableToWriteFile` و `UnableToSetVisibility` را می‌گیرد. پس بدون این
+     * محافظ، هر مشکل نوشتن (مجوز پوشه، پر شدن دیسک، مسیر گم‌شده) به‌جای پیام
+     * فارسی، صفحهٔ ۵۰۰ به کاربر نشان می‌داد — دقیقاً همان چیزی که در پروداکشن
+     * رخ داد: پوشهٔ `storage/app/private/documents/cases` مالکش root با مجوز
+     * 0700 بود و php-fpm که با www-data اجرا می‌شود اجازهٔ ساختن زیرپوشه نداشت.
+     *
+     * `Throwable` عمداً گسترده گرفته می‌شود: قاعدهٔ سامانه این است که کاربر
+     * هرگز صفحهٔ خطای انگلیسی نبیند. در عوض هیچ چیزی بلعیده نمی‌شود — کل
+     * استثنا با یک «کد پیگیری» در لاگ می‌نشیند و همان کد به کاربر داده می‌شود
+     * تا مدیر سامانه بتواند دقیقاً همان رخداد را پیدا کند.
+     *
+     * @param  Throwable|null  $failure  null یعنی putFileAs بدون استثنا false برگرداند
+     * @return string پیام فارسیِ آمادهٔ نمایش
+     */
+    private function diskWriteFailed(
+        Request $request,
+        PermitCase $case,
+        DocumentType $type,
+        ?Throwable $failure,
+    ): string {
+        $reference = Str::upper(Str::random(6));
+
+        Log::error('ذخیرهٔ مدرک پرونده روی دیسک انجام نشد.', [
+            'reference' => $reference,
+            'case_id' => $case->id,
+            'case_code' => $case->code,
+            'document_type' => $type->key,
+            'user_id' => $request->user()?->id,
+            'disk' => self::DISK,
+            'directory' => 'cases/'.$case->id,
+            'exception' => $failure,
+        ]);
+
+        $what = match (true) {
+            $failure instanceof UnableToCreateDirectory => 'سامانه نتوانست پوشهٔ نگهداری مدارک این پرونده را روی سرور بسازد',
+            $failure instanceof UnableToWriteFile => 'سامانه نتوانست فایل را روی محل نگهداری مدارک بنویسد',
+            default => 'ذخیرهٔ فایل روی محل نگهداری مدارک انجام نشد',
+        };
+
+        return 'مدرک «'.$type->label_fa.'» ذخیره نشد: '.$what.'. '
+            .'ایراد از فایل شما نیست و از سمت سرور است (معمولاً مجوز پوشهٔ ذخیره‌سازی یا پر شدن فضای دیسک)، '
+            .'پس دوباره فرستادن همین فایل هم نتیجه نمی‌دهد. '
+            .'چند دقیقهٔ دیگر یک بار تلاش کنید و اگر باز هم تکرار شد این کد پیگیری را به مدیر سامانه بدهید: '
+            .$reference.'. بقیهٔ مدارک این پرونده دست‌نخورده باقی مانده‌اند.';
     }
 
     // ==================================================================
