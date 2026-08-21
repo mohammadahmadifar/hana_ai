@@ -42,7 +42,7 @@ class ReferenceDataSeeder extends Seeder
             'driving_license' => [
                 'گواهینامه رانندگی', 'dataset/templates/driving_license.png', true, [
                     ['national_id', 'کد ملی', 'national_id', true, true],
-                    ['full_name', 'نام و نام خانوادگی', 'text', true, false],
+                    ['full_name', 'نام و نام خانوادگی', 'text', true, true],
                     ['birth_date', 'تاریخ تولد', 'jalali_date', true, true],
                     ['license_issue_date', 'تاریخ صدور', 'jalali_date', true, false],
                     ['license_expire_date', 'تاریخ انقضا', 'jalali_date', false, false],
@@ -51,7 +51,7 @@ class ReferenceDataSeeder extends Seeder
             ],
             'vehicle_card' => [
                 'کارت مالکیت خودرو', 'dataset/templates/vehicle_card.png', true, [
-                    ['full_name', 'نام و نام خانوادگی مالک', 'text', true, false],
+                    ['full_name', 'نام و نام خانوادگی مالک', 'text', true, true],
                     ['national_id', 'کد ملی مالک', 'national_id', true, true],
                     ['father_name', 'نام پدر', 'text', false, false],
                     ['vin', 'شماره شاسی', 'vin', true, false],
@@ -178,8 +178,50 @@ class ReferenceDataSeeder extends Seeder
                 ['آستانه تصمیم پرونده', [
                     'approve_at' => 80,   // امتیاز بالا  ← تایید
                     'reject_below' => 45, // امتیاز پایین ← رد
+                    // ناهمخوانی کد ملی یا نام بین دو مدرک، مستقل از امتیاز پرونده را رد می‌کند.
+                    // دلیل: این تناقض با کیفیت خوبِ بقیهٔ مؤلفه‌ها جبران نمی‌شود و هرچه OCR
+                    // مطمئن‌تر باشد، مغایرت واقعی‌تر است. با false فقط امتیاز پایین می‌آید.
+                    'cross_fail_rejects' => true,
                 ]],
             ],
+
+            'scoring.penalties' => [
+                ['جریمهٔ ایرادهای اعتبارسنجی', [
+                    'failed' => 25,   // هر ایراد جدی، از ۱۰۰ کم می‌شود
+                    'warning' => 8,   // هر هشدار
+                ]],
+            ],
+            'validation.limits' => [
+                ['آستانه‌های اعتبارسنجی اسناد', [
+                    // زیر این اطمینان، تضاد بین دو مدرک «رد قطعی» حساب نمی‌شود
+                    // بلکه «مشکوک» می‌ماند — چون ممکن است خطای OCR باشد نه جعل.
+                    'min_confidence' => 60,
+                    // درصد شباهت نام: بالاتر از این یعنی یکی است،
+                    // بین این دو یعنی مشکوک، پایین‌تر یعنی دو نام متفاوت.
+                    'name_match_min' => 85,
+                    'name_suspect_min' => 60,
+                ]],
+            ],
+
+            // این دو مقدار اسکالرند، نه گروهِ کلید-مقدار: کد آن‌ها را با
+            // (float) Setting::get(...) می‌خواند، پس بسته‌بندی در آرایه
+            // بی‌سروصدا به ۱.۰ تبدیلشان می‌کند.
+            'review.sla_hours' => [
+                ['سقف انتظار صف بررسی انسانی (ساعت)', 72],
+            ],
+
+            'reports.low_confidence' => [
+                ['مرز «خواندن ضعیف» در گزارش OCR (درصد)', 60],
+            ],
+
+            // قانون ۱۳۰ می‌گوید اصلاح کارشناس باید به دیتاست برگردد (ارزان‌ترین دادهٔ
+            // آموزشی سامانه). ولی قانون ۱۲۹ می‌گوید مدرک هویتی واقعی وارد دیتاست
+            // نشود. با دادهٔ مصنوعی تضادی نیست؛ روی مدرک واقعی هست. پس این مسیر
+            // یک کلید خاموش‌شدنی دارد و پیش‌فرضش طبق قانون ۱۳۰ روشن است.
+            'dataset.collect_case_corrections' => [
+                ['بازگرداندن اصلاح کارشناس به دیتاست تگ‌گذاری', true],
+            ],
+
             'precheck.limits' => [
                 ['محدودیت اعتبارسنجی اولیه فایل', [
                     'min_bytes' => 20 * 1024,
@@ -195,16 +237,39 @@ class ReferenceDataSeeder extends Seeder
         ];
 
         foreach ($defaults as $key => [[$label, $value]]) {
-            if (Setting::query()->where('key', $key)->exists()) {
+            $existing = Setting::query()->where('key', $key)->first();
+
+            if ($existing === null) {
+                Setting::create([
+                    'key' => $key,
+                    'value' => $value,
+                    'group' => explode('.', $key)[0],
+                    'label_fa' => $label,
+                ]);
+
                 continue;
             }
 
-            Setting::create([
-                'key' => $key,
-                'value' => $value,
-                'group' => explode('.', $key)[0],
-                'label_fa' => $label,
-            ]);
+            // ردیف موجود دست نمی‌خورد مگر برای کلیدهای تازه‌ای که هنوز ندارد.
+            // بدون این، کلید جدیدی که به یک گروه تنظیمات اضافه می‌شود روی
+            // نصب‌های قبلی هرگز نمی‌آید و کد ناچار می‌شود پیش‌فرض هاردکد نگه دارد
+            // (یا بدتر: صفحهٔ تنظیمات ردیفی بی‌برچسب و بی‌گروه بسازد).
+            // مقدار اسکالر ادغام نمی‌شود؛ مقدارِ ویرایش‌شدهٔ کاربر باید بماند.
+            if (is_array($value) && is_array($existing->value)) {
+                $missing = array_diff_key($value, $existing->value);
+
+                if ($missing !== []) {
+                    $existing->value = $existing->value + $missing;
+                }
+            }
+
+            // برچسب و گروه هم اگر جا افتاده بودند تکمیل می‌شوند.
+            $existing->label_fa ??= $label;
+            $existing->group = $existing->group ?: explode('.', $key)[0];
+
+            if ($existing->isDirty()) {
+                $existing->save();
+            }
         }
     }
 }

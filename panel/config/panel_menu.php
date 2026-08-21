@@ -131,7 +131,7 @@ return [
                     'label' => 'پرونده‌ها',
                     'icon' => '📂',
                     'roles' => [],
-                    'active' => ['cases.index', 'cases.show'],
+                    'active' => ['cases.index', 'cases.show', 'cases.documents.*', 'cases.submit'],
                 ],
                 [
                     'route' => 'cases.review',
@@ -140,6 +140,13 @@ return [
                     'roles' => [],
                     'active' => 'cases.review*',
                     'counter' => 'cases_needs_review',
+                ],
+                [
+                    'route' => 'reports.index',
+                    'label' => 'گزارش خطاها',
+                    'icon' => '📉',
+                    'roles' => [],
+                    'active' => 'reports.*',
                 ],
             ],
         ],

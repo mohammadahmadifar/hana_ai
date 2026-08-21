@@ -23,6 +23,25 @@ class MediaController extends Controller
     /** فقط این دیسک‌ها قابل سرو شدن‌اند. */
     private const ALLOWED_DISKS = ['documents', 'dataset', 'testimages'];
 
+    /**
+     * نقش لازم برای دیدن هر دیسک.
+     *
+     * تا پیش از تسک ۶۲۹ فقط «لاگین بودن» بررسی می‌شد، یعنی «کارشناس داده» —
+     * که کل بخش «درخواست خدمت» را در منو هم نمی‌بیند — می‌توانست با داشتن
+     * نشانی، اسکن کارت ملی و گواهینامهٔ متقاضی‌ها را باز کند. دیسک documents
+     * حساس‌ترین دادهٔ سامانه است و باید همان نقش‌هایی ببینندش که پرونده بررسی
+     * می‌کنند.
+     *
+     * عمداً «مالکیت» بررسی نمی‌شود: کارشناس بررسی باید پروندهٔ دیگران را باز
+     * کند (تسک ۶۳۵ صف بررسی انسانی است)، پس محدود کردن به پروندهٔ خودِ کاربر
+     * صفحهٔ بررسی را می‌شکست. مرز واقعیِ این سامانه نقش است، نه مالکیت.
+     */
+    private const DISK_GUARD = [
+        'documents' => 'canReviewCases',
+        'dataset' => 'canManageDataset',
+        'testimages' => null,   // تصویر مصنوعیِ ساختِ خود کاربر؛ هر سه نقش می‌سازند
+    ];
+
     /** عرض‌های مجاز بندانگشتی — فهرست بسته، تا کسی با w دلخواه دیسک را پر نکند. */
     private const ALLOWED_WIDTHS = [120, 200, 320, 480, 800];
 
@@ -31,6 +50,12 @@ class MediaController extends Controller
     public function show(Request $request, string $disk, string $path): StreamedResponse|Response
     {
         abort_unless(in_array($disk, self::ALLOWED_DISKS, true), 404);
+
+        $guard = self::DISK_GUARD[$disk] ?? null;
+
+        if ($guard !== null) {
+            abort_unless((bool) $request->user()?->{$guard}(), 403, 'نقش شما اجازهٔ دیدن این فایل را ندارد.');
+        }
 
         // جلوگیری از پیمایش مسیر: هیچ «..» و هیچ مسیر مطلقی پذیرفته نمی‌شود
         abort_if(str_contains($path, '..') || str_starts_with($path, '/'), 404);
