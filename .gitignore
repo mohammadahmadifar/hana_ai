@@ -64,3 +64,17 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 .DS_Store
+
+# ---------------------------------------------
+# پنل لاراول
+# ---------------------------------------------
+panel/vendor/
+panel/node_modules/
+panel/.env
+panel/storage/app/private/
+panel/storage/framework/cache/
+panel/storage/framework/sessions/
+panel/storage/framework/views/
+panel/storage/logs/
+panel/public/storage
+panel/.phpunit.result.cache

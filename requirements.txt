@@ -1,0 +1,16 @@
+# ------------------------------------------------
+# پیش‌نیازهای پایتون پروژه
+# نصب:  pip install -r requirements.txt
+#
+# نیاز سیستمی (خارج از pip):
+#   Tesseract OCR 5.x به همراه دیتای زبان fas و eng
+#   ویندوز : https://github.com/UB-Mannheim/tesseract/wiki
+#   لینوکس : apt install tesseract-ocr tesseract-ocr-fas tesseract-ocr-eng
+# ------------------------------------------------
+
+Faker>=30.0
+jdatetime>=5.0
+pillow>=10.0
+numpy>=1.26
+opencv-python>=4.9        # روی سرور بدون گرافیک: opencv-python-headless
+pytesseract>=0.3.13

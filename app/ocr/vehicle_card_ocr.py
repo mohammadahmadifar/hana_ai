@@ -2,6 +2,8 @@ from pathlib import Path
 import cv2
 import pytesseract
 
+from app.config.settings import TESSERACT_CMD
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 image_path = (
@@ -13,7 +15,7 @@ image_path = (
 )
 
 pytesseract.pytesseract.tesseract_cmd = (
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    TESSERACT_CMD
 )
 
 

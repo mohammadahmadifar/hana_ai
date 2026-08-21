@@ -2,6 +2,7 @@ from pathlib import Path
 
 import cv2
 import pytesseract
+from app.config.settings import TESSERACT_CMD
 from app.ocr.vehicle_card_ocr import vehicle_card_ocr
 
 # -------------------------------------
@@ -9,7 +10,7 @@ from app.ocr.vehicle_card_ocr import vehicle_card_ocr
 
 pytesseract.pytesseract.tesseract_cmd = (
 
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    TESSERACT_CMD
 
 )
 
