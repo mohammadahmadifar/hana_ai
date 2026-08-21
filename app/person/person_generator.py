@@ -251,6 +251,12 @@ def generate_vin():
 
 # -------------------------------------
 
+# واژهٔ ثابت میان سه‌رقمی و کد استان در پلاک ایرانی.
+# هم اینجا (لیبل و چاپ) و هم در app/ocr/vehicle_card_ocr.py استفاده می‌شود؛
+# اگر عوض شد باید هر دو طرف با هم عوض شوند وگرنه دقت پلاک صفر می‌شود.
+PLATE_COUNTRY_WORD = "ایران"
+
+
 def generate_plate_number():
 
     letters = [
@@ -272,18 +278,20 @@ def generate_plate_number():
 
     ]
 
-    first_part = random.randint(10, 99)
+    # قالب رسمی پلاک ایران: دو رقم، حرف، سه رقم، «ایران»، دو رقم کد استان
+    # نمونه: «۱۲ ب ۳۴۵ ایران ۶۷»
+    two_digits = random.randint(10, 99)
 
-    second_part = random.choice(
+    letter = random.choice(
         letters
     )
 
-    third_part = random.randint(
+    three_digits = random.randint(
         100,
         999
     )
 
-    fourth_part = random.randint(
+    province_code = random.randint(
         10,
         99
     )
@@ -291,10 +299,11 @@ def generate_plate_number():
 
     plate = (
 
-        f"{first_part} "
-        f"{third_part} "
-        f"{second_part} "
-        f"{fourth_part}"
+        f"{two_digits} "
+        f"{letter} "
+        f"{three_digits} "
+        f"{PLATE_COUNTRY_WORD} "
+        f"{province_code}"
 
     )
 
