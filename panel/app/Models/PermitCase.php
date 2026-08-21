@@ -2,12 +2,16 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class PermitCase extends Model
 {
+    /** @use HasFactory<\Database\Factories\PermitCaseFactory> */
+    use HasFactory;
+
     protected $table = 'cases';
 
     protected $fillable = [
