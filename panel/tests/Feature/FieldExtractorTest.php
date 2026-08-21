@@ -6,6 +6,9 @@ use App\Models\CaseDocument;
 use App\Models\DocumentType;
 use App\Models\ExtractedField;
 use App\Models\OcrRun;
+use App\Services\Cases\Extraction\NameReader;
+use App\Services\Cases\Extraction\OcrText;
+use App\Services\Cases\Extraction\VehicleReader;
 use App\Services\Cases\FieldExtractor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Concerns\BuildsCases;
@@ -223,6 +226,117 @@ TXT;
         }
     }
 
+    // ------------------------------------------------------------------
+    // رگرسیون‌های بازبینی تسک ۶۳۲
+    // ------------------------------------------------------------------
+
+    /**
+     * یک عدد هرگز نباید «نام» شمرده شود.
+     *
+     * بلوک یونیکد `\p{Arabic}` ارقام فارسی و عربی را هم در بر می‌گیرد، پس
+     * `isPersianWord('۱۲۳۴۵')` صادق بود و «۱۲۳۴۵» با اطمینان ۸۵ به‌عنوان نام
+     * ذخیره می‌شد. آن اطمینان از آستانهٔ اعتماد بالاتر است، پس تطابق نام بین
+     * مدارک mismatch می‌شد و پروندهٔ سالم خودکار رد می‌شد.
+     */
+    public function test_a_number_is_never_accepted_as_a_name(): void
+    {
+        $fields = $this->read(
+            'national_card',
+            "شماره ملی ۰۰۱۲۳۴۵۶۷۸\nنام ۱۲۳۴۵\nنام خانوادگی تحسینی\nنام پدر ۵۹۲\n",
+        );
+
+        $this->assertNull($fields['first_name']['normalized']);
+        $this->assertSame(0.0, $fields['first_name']['confidence']);
+        $this->assertNull($fields['father_name']['normalized']);
+        $this->assertSame(0.0, $fields['father_name']['confidence']);
+
+        // سطر سالمِ همان مدرک نباید قربانی سخت‌گیری شود
+        $this->assertSame('تحسینی', $fields['last_name']['normalized']);
+    }
+
+    /** همان قاعده در سطح خودِ تابع — هر دو جهت، تا سخت‌گیری از حد نگذرد. */
+    public function test_persian_word_needs_a_letter_but_keeps_zwnj_and_marks(): void
+    {
+        foreach (['۱۲۳۴۵', '۵۹۲', '٠١٢٣٤', '۱۲ب', 'ali', '12345'] as $token) {
+            $this->assertFalse(OcrText::isPersianWord($token), $token);
+        }
+
+        foreach (['حسام', 'علی', "بهره\u{200C}برداری", 'اسماء', 'مُحَمَّد'] as $token) {
+            $this->assertTrue(OcrText::isPersianWord($token), $token);
+        }
+    }
+
+    /**
+     * وقتی برچسب روی جداکننده بریده شد، نام کوچک نباید ته‌ماندهٔ برچسب حساب شود.
+     *
+     * distance('سام', 'نام') = ۱ است و با بودجهٔ فازی دور ریخته می‌شد؛ نتیجه
+     * «رضایی» بود که شباهتش با نام واقعی ۵۵٪ است — زیر آستانهٔ «مشکوک»، یعنی
+     * mismatch و رد خودکار.
+     */
+    public function test_a_first_name_close_to_the_label_survives_the_separator(): void
+    {
+        $this->assertSame(
+            'سام رضایی',
+            NameReader::fromLine('نام و نام خانوادگی: سام رضایی', 'full_name', 3)['value'],
+        );
+
+        $this->assertSame(
+            'سام رضایی',
+            NameReader::fromLine('مشخصات مالک:(حقیقی / حقوقی) سام رضایی', 'full_name', 2)['value'],
+        );
+    }
+
+    /** و برچسب‌هایی که واقعاً ته‌ماندهٔ برچسب‌اند هنوز باید پاک شوند. */
+    public function test_real_label_remnants_are_still_stripped(): void
+    {
+        // تطابق دقیق، حتی بعد از برشِ جداکننده
+        $this->assertSame(
+            'سام رضایی',
+            NameReader::fromLine('مشخصات مالک : حقیقی حقوقی سام رضایی', 'full_name', 2)['value'],
+        );
+
+        // تطابق فازی وقتی جداکننده‌ای در کار نیست: «بحر» همان «پدر» است
+        $this->assertSame(
+            'محمد مهدی',
+            NameReader::fromLine('بحر محمد مهدی', 'father_name', 2)['value'],
+        );
+
+        // برچسبِ نابودشده: هیچ نشانه‌ای نمانده، پس فقط یک توکن آخر برداشته می‌شود
+        $this->assertSame('طلوعی', NameReader::fromLine('موی طلوعی', 'last_name', 2)['value']);
+
+        // و اگر بعد از دور ریختن آشغال فقط خودِ برچسب مانده باشد، مقداری نیست
+        $this->assertNull(NameReader::fromLine('نام خانوادگی ۱۲۳۴۵', 'last_name', 2));
+    }
+
+    /**
+     * برچسبِ بعد از مقدار نباید سطر را از گذر دوم بیرون بیندازد.
+     *
+     * پیش‌تر سطری که کلیدواژهٔ «پلاک» داشت ولی الگو در دنبالهٔ بعد از کلیدواژه
+     * نبود با continue کنار گذاشته می‌شد، یعنی وجود برچسب نتیجه را از «پیدا شد»
+     * به «پیدا نشد» می‌برد و plate_number خالی می‌ماند.
+     */
+    public function test_plate_is_found_when_its_label_comes_after_the_value(): void
+    {
+        $this->assertSame(
+            '۱۲ ب ۳۴۵ ایران ۶۷',
+            VehicleReader::plateFromText(new OcrText('۱۲ ب ۳۴۵ ایران ۶۷ شماره پلاک'))['value'],
+        );
+
+        // برچسب پیش از مقدار هنوز کار می‌کند
+        $this->assertSame(
+            '۱۲ ب ۳۴۵ ایران ۶۷',
+            VehicleReader::plateFromText(new OcrText('PLATE : ۱۲ ب ۳۴۵ ایران ۶۷'))['value'],
+        );
+
+        $fields = $this->read(
+            'vehicle_card',
+            "مشخصات مالک :(حقیقی / حقوقی) سام رضایی\n۱۲ ب ۳۴۵ ایران ۶۷ شماره پلاک\n",
+        );
+
+        $this->assertSame('۱۲ ب ۳۴۵ ایران ۶۷', $fields['plate_number']['normalized']);
+        $this->assertSame('سام رضایی', $fields['full_name']['normalized']);
+    }
+
     public function test_a_blank_page_produces_no_value_and_no_confidence(): void
     {
         $fields = $this->read('national_card', "\n\n   \n");
@@ -302,6 +416,36 @@ TXT;
         $this->assertDatabaseHas('extracted_fields', [
             'case_document_id' => $document->id,
             'field_key' => 'national_id',
+        ]);
+    }
+
+    /**
+     * یک اجرای ناموفق OCR نباید دادهٔ سالم اجرای قبلی را نابود کند.
+     *
+     * وقتی این اجرا هیچ فیلدی پیدا نمی‌کرد، شرط whereNotIn غیرفعال می‌شد و
+     * delete بی‌قید همهٔ ردیف‌های source=ocr آن مدرک را می‌برد: ocr_quality صفر
+     * می‌شد و document.missing_required از passed به failed می‌رفت.
+     */
+    public function test_an_empty_ocr_rerun_keeps_the_fields_of_the_previous_run(): void
+    {
+        [$document, $run] = $this->documentWithOcr('national_card', self::NATIONAL_CARD_CLEAN);
+        $extractor = app(FieldExtractor::class);
+
+        $this->assertSame(6, $extractor->extract($document, $run));
+
+        // OCR دوباره اجرا شده ولی این بار متنی درنیامده (تصویر خراب، صفحهٔ سفید)
+        $run->update(['raw_text' => '']);
+
+        $this->assertSame(0, $extractor->extract($document, $run->refresh()));
+
+        $this->assertSame(
+            6,
+            ExtractedField::query()->where('case_document_id', $document->id)->count(),
+        );
+        $this->assertDatabaseHas('extracted_fields', [
+            'case_document_id' => $document->id,
+            'field_key' => 'first_name',
+            'normalized_value' => 'ایلیا',
         ]);
     }
 

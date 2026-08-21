@@ -138,13 +138,21 @@ final class FieldExtractor
             $written++;
         }
 
-        // ردیف‌های بیاتِ اجرای قبلی که این بار پیدا نشدند؛ اصلاح دستی دست‌نخورده می‌ماند
-        ExtractedField::query()
-            ->where('case_id', $document->case_id)
-            ->where('case_document_id', $document->id)
-            ->where('source', 'ocr')
-            ->when($touched !== [], fn ($query) => $query->whereNotIn('field_key', $touched))
-            ->delete();
+        // ردیف‌های بیاتِ اجرای قبلی که این بار پیدا نشدند؛ اصلاح دستی دست‌نخورده می‌ماند.
+        //
+        // اگر این اجرا **هیچ** فیلدی نداد (متن خام خالی یا خرابِ یک OCR ناموفق)،
+        // هیچ ردیفی پاک نمی‌شود. قبلاً شرط whereNotIn در این حالت غیرفعال می‌شد و
+        // delete بی‌قید همهٔ فیلدهای درستِ اجرای قبلی را می‌برد؛ یعنی یک اجرای
+        // ناموفق OCR دادهٔ سالم را نابود می‌کرد و مدرک از passed به failed می‌رفت.
+        // «چیزی پیدا نشد» شاهدِ «قبلی‌ها دیگر معتبر نیستند» نیست.
+        if ($touched !== []) {
+            ExtractedField::query()
+                ->where('case_id', $document->case_id)
+                ->where('case_document_id', $document->id)
+                ->where('source', 'ocr')
+                ->whereNotIn('field_key', $touched)
+                ->delete();
+        }
 
         return $written;
     }
