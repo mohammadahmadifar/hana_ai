@@ -130,6 +130,10 @@
         color: var(--ink-soft); font-family: "JetBrains Mono", monospace; direction: ltr;
     }
 
+    /* کلاس alert مقدار display: flex دارد و بر ویژگی hidden غلبه می‌کند؛
+       این قاعده هشدار را تا وقتی لازم نشده واقعاً پنهان نگه می‌دارد. */
+    #annoClipWarn[hidden] { display: none; }
+
     @media (prefers-reduced-motion: reduce) {
         .abox, .fld, .btn, .bar__fill { transition: none !important; }
     }
@@ -202,6 +206,19 @@
             </div>
         </div>
     @endif
+
+    {{-- کادرهایی که بیرون از تصویر ذخیره شده‌اند و برای ذخیره‌شدن به لبه چسبیده‌اند --}}
+    <div class="alert alert--warn" id="annoClipWarn" role="alert" hidden>
+        <span class="alert__icon" aria-hidden="true">✂️</span>
+        <div class="alert__body">
+            <strong>کادر چند فیلد بیرون از تصویر بود</strong>
+            <span>
+                کادر این فیلدها به لبهٔ تصویر چسبانده شد تا قابل ذخیره باشد:
+                <span id="annoClipList"></span>
+            </span>
+            <span>اگر اندازه‌شان درست نیست، دوباره بکشید؛ تا وقتی ذخیره نزنید چیزی در دیتابیس عوض نمی‌شود.</span>
+        </div>
+    </div>
 
     <noscript>
         <div class="alert alert--warn" role="alert">
@@ -333,7 +350,8 @@
                         {{-- فیلد پنهان تا «تیک برداشته‌شده» هم به سرور برسد --}}
                         <input type="hidden" name="verify" value="0">
                         <label class="check" for="annoVerify">
-                            <input type="checkbox" id="annoVerify" name="verify" value="1" @checked($sample->is_verified)>
+                            <input type="checkbox" id="annoVerify" name="verify" value="1"
+                                   @checked(old('verify', $sample->is_verified ? '1' : '0') === '1')>
                             تایید نهایی این نمونه (از صف خارج می‌شود)
                         </label>
                         <div class="row" style="display:flex; gap:8px; flex-wrap:wrap">
@@ -418,6 +436,15 @@
         return { x: round6(x), y: round6(y), w: round6(w), h: round6(h) };
     }
 
+    // رواداری کمی بزرگ‌تر از خطای round6 تا گرد کردن، «تغییر» شمرده نشود.
+    function sameBox(a, b) {
+        if (!a || !b) { return !a && !b; }
+
+        return ['x', 'y', 'w', 'h'].every(function (axis) {
+            return Math.abs((Number(a[axis]) || 0) - (Number(b[axis]) || 0)) <= 0.000002;
+        });
+    }
+
     function percent(value) { return (value * 100).toFixed(4) + '%'; }
 
     function place(el, box) {
@@ -446,11 +473,20 @@
 
     /* ---------------- وضعیت اولیه ---------------- */
 
+    // کادرهایی که در دیتابیس کمی بیرون از تصویر بوده‌اند اینجا به لبه
+    // چسبانده می‌شوند (وگرنه سرور ذخیره را رد می‌کند)، ولی دیگر بی‌صدا
+    // نیست: نامشان بالای صفحه به کاربر نشان داده می‌شود.
+    var clipped = [];
+
     FIELDS.forEach(function (field) {
+        var box = field.bbox ? tidy(field.bbox) : null;
+
+        if (box && !sameBox(field.bbox, box)) { clipped.push(field.label); }
+
         state[field.key] = {
             label: field.label,
             required: !!field.required,
-            bbox: field.bbox ? tidy(field.bbox) : null
+            bbox: box
         };
     });
 
@@ -845,6 +881,14 @@
     syncCounter();
     setActive(firstEmpty || (FIELDS.length ? FIELDS[0].key : null), false);
     setZoom(1);
+
+    var clipWarn = document.getElementById('annoClipWarn');
+    var clipList = document.getElementById('annoClipList');
+
+    if (clipped.length && clipWarn && clipList) {
+        clipList.textContent = clipped.join('\u060C ');
+        clipWarn.hidden = false;
+    }
 })();
 </script>
 @endpush

@@ -158,10 +158,17 @@
                                 @foreach ($rows as $row)
                                     <tr>
                                         <th scope="row">{{ $row['label'] }}</th>
-                                        <td class="{{ $row['type'] === 'vin' ? 'mono ltr' : 'num' }}">{{ $row['value'] }}</td>
+                                        <td class="{{ $row['type'] === 'vin' ? 'mono ltr' : 'num' }}">
+                                            {{ $row['value'] }}
+                                            @unless ($row['printed'])
+                                                <x-badge tone="warn" label="روی قالب چاپ نشد" />
+                                            @endunless
+                                        </td>
                                         @if ($ocr)
                                             <td>
-                                                @if ($ocrByKey->has($row['key']) && $ocrByKey[$row['key']]['found'])
+                                                @if (! $row['printed'])
+                                                    <x-badge tone="warn" label="— سنجیده نشد" />
+                                                @elseif ($ocrByKey->has($row['key']) && $ocrByKey[$row['key']]['found'])
                                                     <x-badge tone="ok" label="✔ پیدا شد" />
                                                 @else
                                                     <x-badge tone="bad" label="✘ پیدا نشد" />
@@ -173,6 +180,20 @@
                             </tbody>
                         </table>
                     </div>
+
+                    @php
+                        $unprinted = array_values(array_map(
+                            static fn (array $row): string => $row['label'],
+                            array_filter($rows, static fn (array $row): bool => ! $row['printed']),
+                        ));
+                    @endphp
+
+                    @if ($unprinted !== [])
+                        <p class="hint">
+                            «{{ implode('»، «', $unprinted) }}» در چیدمان این قالب جایی برای چاپ ندارد،
+                            پس روی تصویر نیامده است و در سنجش OCR هم شمرده نمی‌شود.
+                        </p>
+                    @endif
                 @endif
             </div>
         </div>
@@ -206,7 +227,8 @@
                     @endphp
 
                     <div class="grid grid--3">
-                        <x-stat :value="$ocr['found'].' از '.$ocr['total']" label="فیلد پیداشده در متن" :tone="$tone" />
+                        <x-stat :value="PersianValue::toPersianDigits($ocr['found'].' از '.$ocr['total'])"
+                                label="فیلد پیداشده در متن" :tone="$tone" />
                         <x-stat :value="$ocr['char_count']" label="نویسهٔ خوانده‌شده" />
                         <x-stat :value="$ocr['line_count']" label="خط خوانده‌شده" />
                     </div>

@@ -98,7 +98,17 @@ final class PersianValue
     }
 
     /**
-     * آماده‌سازی نهایی یک مقدار برای فرستادن به موتور.
+     * شکل قانونی (canonical) یک مقدار — تنها منبع حقیقت.
+     *
+     * خروجی همین تابع است که هم اعتبارسنجی می‌شود، هم به موتور می‌رود،
+     * هم روی مدرک چاپ می‌شود و هم به‌عنوان برچسب آموزشی ذخیره می‌شود.
+     *
+     * پیش‌تر اعتبارسنجی جداکننده‌ها را نادیده می‌گرفت ولی این مسیر آن‌ها را
+     * نگه می‌داشت، پس «۰۰۶-۹۵۳-۷۴۱۰» به‌عنوان کد ملی پذیرفته می‌شد و با
+     * همان خط تیره روی کارت چاپ و ذخیره می‌شد؛ یعنی برچسب آموزشی خراب.
+     *
+     * قاعده: از هر نوع دقیقاً همان جداکننده‌هایی حذف می‌شود که اعتبارسنجی
+     * همان نوع نادیده می‌گرفت. این تابع خودتکرار است (canonical(canonical(x)) = canonical(x)).
      *
      * VIN تنها استثناست: شمارهٔ شاسی روی کارت واقعی لاتین چاپ می‌شود و
      * ماژول app/ocr/vehicle_card_ocr.py هم لاتین می‌خواند، پس فارسی‌سازی
@@ -112,15 +122,68 @@ final class PersianValue
             return '';
         }
 
-        if ($valueType === 'vin') {
-            return mb_strtoupper(self::toEnglishDigits($value));
+        return match ($valueType) {
+            'text' => $value,
+            'vin' => mb_strtoupper(str_replace([' ', '-'], '', self::toEnglishDigits($value))),
+            'national_id' => self::toPersianDigits(str_replace([' ', '-'], '', $value)),
+            'digits' => self::toPersianDigits(str_replace(' ', '', $value)),
+            'jalali_date' => self::canonicalJalaliDate($value),
+            'plate' => self::canonicalPlate($value),
+            default => self::toPersianDigits($value),
+        };
+    }
+
+    /**
+     * تاریخ شمسی به همان شکلی که ژنراتور موتور چاپ می‌کند: YYYY/MM/DD با صفر ابتدایی
+     * (app/person/person_generator.py → format_date با strftime("%Y/%m/%d")).
+     *
+     * جداکنندهٔ «-» و «.» به «/» تبدیل و فاصله‌ها حذف می‌شوند — همان چیزی که
+     * اعتبارسنجی تاریخ از قبل نادیده می‌گرفت. اگر ورودی اصلاً شکل تاریخ نداشته
+     * باشد دست‌نخورده برمی‌گردد تا اعتبارسنجی خطای درست بدهد.
+     */
+    private static function canonicalJalaliDate(string $value): string
+    {
+        $plain = str_replace(['-', '.', '\\'], '/', self::toEnglishDigits($value));
+        $plain = str_replace(' ', '', $plain);
+
+        if (preg_match('/^([0-9]{4})\/([0-9]{1,2})\/([0-9]{1,2})$/', $plain, $m)) {
+            $plain = $m[1].'/'
+                .str_pad($m[2], 2, '0', STR_PAD_LEFT).'/'
+                .str_pad($m[3], 2, '0', STR_PAD_LEFT);
         }
 
-        if ($valueType === 'text') {
-            return $value;
+        return self::toPersianDigits($plain);
+    }
+
+    /**
+     * پلاک به همان ترتیبی که روی کارت خودرو چاپ می‌شود: دو رقم، سه رقم، حرف، دو رقم
+     * (خروجی generate_plate_number در موتور).
+     *
+     * اعتبارسنجی ترتیب خواندنی («۸۸ و ۵۱۱ ایران ۳۵») را هم قبول می‌کند، پس اگر
+     * کاربر آن را بنویسد همین‌جا به ترتیب چاپ برگردانده می‌شود؛ وگرنه مقدار
+     * چاپ‌شده با مقداری که موتور می‌شناسد یکی نمی‌شود.
+     */
+    private static function canonicalPlate(string $value): string
+    {
+        $plain = preg_replace('/\s+/u', ' ', self::toPersianDigits($value));
+        $plain = trim($plain ?? $value);
+
+        $pattern = '/^([۰-۹]{2}) ('.self::plateLetterPattern().') ([۰-۹]{3})(?: ایران)? ([۰-۹]{2})$/u';
+
+        if (preg_match($pattern, $plain, $m)) {
+            return $m[1].' '.$m[3].' '.$m[2].' '.$m[4];
         }
 
-        return self::toPersianDigits($value);
+        return $plain;
+    }
+
+    /** الگوی regex حروف مجاز پلاک — یک جا تعریف می‌شود و دو جا استفاده. */
+    private static function plateLetterPattern(): string
+    {
+        return implode('|', array_map(
+            static fn (string $letter): string => preg_quote($letter, '/'),
+            self::PLATE_LETTERS,
+        ));
     }
 
     // ------------------------------------------------------------------
@@ -134,7 +197,8 @@ final class PersianValue
      */
     public static function validate(string $valueType, ?string $value, string $label): ?string
     {
-        $value = self::normalize($value);
+        // دقیقاً همان شکلی اعتبارسنجی می‌شود که چاپ و ذخیره خواهد شد
+        $value = self::forEngine($valueType, $value);
 
         if ($value === '') {
             return null; // خالی‌بودن را قانون «الزامی» جدا بررسی می‌کند
@@ -305,13 +369,9 @@ final class PersianValue
      */
     private static function validatePlate(string $value, string $label): ?string
     {
-        $plain = self::toPersianDigits(self::normalize($value));
-        $plain = preg_replace('/\s+/u', ' ', $plain) ?? $plain;
+        $plain = self::canonicalPlate($value);
 
-        $letters = implode('|', array_map(
-            static fn (string $letter): string => preg_quote($letter, '/'),
-            self::PLATE_LETTERS,
-        ));
+        $letters = self::plateLetterPattern();
 
         $generatorOrder = '/^[۰-۹]{2} [۰-۹]{3} (?:'.$letters.') [۰-۹]{2}$/u';
         $readingOrder = '/^[۰-۹]{2} (?:'.$letters.') [۰-۹]{3}(?: ایران)? [۰-۹]{2}$/u';

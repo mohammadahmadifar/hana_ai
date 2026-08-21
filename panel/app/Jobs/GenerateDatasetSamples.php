@@ -29,6 +29,11 @@ use Throwable;
  * قرارداد پیشرفت: بعد از هر «نمونه» (یعنی هر شخص) شمارندهٔ count_done یا
  * count_failed یک واحد بالا می‌رود تا صفحهٔ پیشرفت زنده باشد. خطای یک نمونه
  * هرگز کل دسته را نمی‌کشد.
+ *
+ * سنجه اما «تصویر» است نه «نمونه»: نمونه فقط وقتی انجام‌شده حساب می‌شود که
+ * همهٔ مدرک‌های خواسته‌شده‌اش ساخته شده باشند، و شمار تصویرهای ساخته‌نشده به
+ * همراه خطای هر نوع مدرک در ستون error دسته نوشته می‌شود تا در صفحهٔ پیشرفت
+ * دیده شود. وگرنه شکستِ همیشگی یک نوع مدرک پشت «۱۰۰٪ موفق» پنهان می‌ماند.
  */
 class GenerateDatasetSamples implements ShouldQueue
 {
@@ -248,6 +253,12 @@ class GenerateDatasetSamples implements ShouldQueue
         $subDirectory = Carbon::now()->format('Y-m');
         $absoluteDirectory = Storage::disk('dataset')->path($subDirectory);
         $startedAt = microtime(true);
+        $typeCount = $types->count();
+
+        // شمار تصویرهای ساخته‌شده/ناموفق + خطای هر نوع مدرک؛ همین‌ها به صفحهٔ پیشرفت می‌روند.
+        /** @var array<string, array{label: string, count: int, message: string}> $typeFailures */
+        $typeFailures = [];
+        $imagesFailed = 0;
 
         foreach (array_values($people) as $offset => $person) {
             if (! is_array($person)) {
@@ -268,6 +279,9 @@ class GenerateDatasetSamples implements ShouldQueue
                     $this->renderOne($engine, $batch, $type, $person, $spec, $split, $index, $subDirectory, $absoluteDirectory, $tagIds);
                     $succeeded++;
                 } catch (Throwable $exception) {
+                    $imagesFailed++;
+                    $this->recordTypeFailure($typeFailures, $type, $exception);
+
                     Log::warning('generate-dataset: one document failed', [
                         'batch_id' => $batch->id,
                         'sample_index' => $index,
@@ -277,9 +291,12 @@ class GenerateDatasetSamples implements ShouldQueue
                 }
             }
 
-            // «نمونه» یعنی یک شخص. اگر دست‌کم یکی از مدرک‌هایش ساخته شد، موفق است.
-            $batch->increment($succeeded > 0 ? 'count_done' : 'count_failed');
+            // «نمونه» یعنی یک شخص، ولی فقط وقتی انجام‌شده است که هیچ‌کدام از
+            // مدرک‌هایش جا نمانده باشد؛ وگرنه یک نوع مدرکِ خراب دیده نمی‌شود.
+            $batch->increment($succeeded === $typeCount ? 'count_done' : 'count_failed');
             $batch->refresh();
+
+            $this->refreshFailureNote($batch, $typeCount, $typeFailures);
 
             // مرز زمانی نرم: بقیهٔ کار به یک Job تازه سپرده می‌شود تا به timeout نخوریم.
             $isLast = ($index + 1) >= (int) $batch->count_requested;
@@ -295,6 +312,15 @@ class GenerateDatasetSamples implements ShouldQueue
 
                 return;
             }
+        }
+
+        $this->refreshFailureNote($batch, $typeCount, $typeFailures);
+
+        // اگر در کل دسته (نه فقط این اجرا) هیچ تصویری ساخته نشد، «پایان‌یافته» نیست؛ ناموفق است.
+        if ($imagesFailed > 0 && DatasetSample::query()->where('notes', 'batch:'.$batch->id)->count() === 0) {
+            $this->markFailed($batch, 'هیچ تصویری ساخته نشد. '.(string) $batch->error);
+
+            return;
         }
 
         $this->markDone($batch);
@@ -559,6 +585,76 @@ class GenerateDatasetSamples implements ShouldQueue
         }
 
         return array_values(array_unique(array_map('intval', $ids)));
+    }
+
+    /**
+     * خطای یک نوع مدرک را جمع می‌کند: شمار تصویرهای ناموفق + نخستین پیام.
+     *
+     * @param  array<string, array{label: string, count: int, message: string}>  $typeFailures
+     */
+    private function recordTypeFailure(array &$typeFailures, DocumentType $type, Throwable $exception): void
+    {
+        $key = (string) $type->key;
+
+        if (! isset($typeFailures[$key])) {
+            $raw = $exception instanceof EngineException
+                ? $exception->userMessage()
+                : $exception->getMessage();
+
+            $raw = trim((string) $raw);
+
+            $typeFailures[$key] = [
+                'label' => (string) ($type->label_fa ?: $key),
+                'count' => 0,
+                'message' => Str::limit($raw !== '' ? $raw : 'خطای نامشخص', 160),
+            ];
+        }
+
+        $typeFailures[$key]['count']++;
+    }
+
+    /**
+     * خلاصهٔ تصویرهای ساخته‌نشده را روی ستون error می‌نویسد تا صفحهٔ پیشرفت
+     * همان لحظه نشانش دهد. شمارش در سطح «تصویر» است: انتظار = نمونهٔ
+     * پردازش‌شده × نوع مدرک، واقعیت = ردیف‌های ثبت‌شدهٔ همین دسته در دیتاست.
+     *
+     * @param  array<string, array{label: string, count: int, message: string}>  $typeFailures
+     */
+    private function refreshFailureNote(GenerationBatch $batch, int $typeCount, array $typeFailures): void
+    {
+        // اجرای بی‌خطا نه پرس‌وجوی اضافه می‌زند و نه یادداشت اجرای قبلی را پاک می‌کند.
+        if ($typeFailures === []) {
+            return;
+        }
+
+        $processed = (int) $batch->count_done + (int) $batch->count_failed;
+        $expected = $processed * max(1, $typeCount);
+        $stored = DatasetSample::query()->where('notes', 'batch:'.$batch->id)->count();
+        $missing = max(0, $expected - $stored);
+
+        $lines = ['از '.$this->fa($expected).' تصویر پردازش‌شده، '.$this->fa($missing).' تصویر ساخته نشد.'];
+
+        foreach ($typeFailures as $row) {
+            $lines[] = '«'.$row['label'].'»: '.$this->fa($row['count']).' تصویر ناموفق — '.$row['message'];
+        }
+
+        $note = Str::limit(implode(' ', $lines), 800);
+
+        if ($note === (string) $batch->error) {
+            return;
+        }
+
+        $batch->error = $note;
+        $batch->save();
+    }
+
+    /** رقم فارسی برای پیامی که کاربر می‌بیند. */
+    private function fa(int|float|string $value): string
+    {
+        return strtr((string) $value, [
+            '0' => '۰', '1' => '۱', '2' => '۲', '3' => '۳', '4' => '۴',
+            '5' => '۵', '6' => '۶', '7' => '۷', '8' => '۸', '9' => '۹',
+        ]);
     }
 
     private function markDone(GenerationBatch $batch): void

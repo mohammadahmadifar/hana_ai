@@ -11,6 +11,7 @@ use App\Support\DatasetExporter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -22,6 +23,10 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * فیلتر می‌گیریم، تعداد نمونه را زنده نشان می‌دهیم و ساخت بسته را به صف
  * می‌سپاریم. فهرست خروجی‌ها مستقیم از دیسک «exports» خوانده می‌شود؛ هیچ
  * جدولی برای این بخش وجود ندارد.
+ *
+ * سه لایه نگهبان دیسک: محدودیت نرخ برای هر کاربر، ممنوعیت بستهٔ دوم تا
+ * پایان بستهٔ در حال ساخت، و پاک‌سازی خودکار بسته‌های قدیمی هنگام هر
+ * درخواست تازه.
  */
 class ExportController extends Controller
 {
@@ -39,6 +44,7 @@ class ExportController extends Controller
             ->pluck('aggregate_total', 'document_type_id');
 
         $exports = DatasetExporter::listAll();
+        $userId = (int) ($request->user()?->id ?? 0);
 
         return view('dataset.export.index', [
             'documentTypes' => DocumentType::query()->orderBy('sort')->get(['id', 'key', 'label_fa']),
@@ -55,6 +61,13 @@ class ExportController extends Controller
             'sources' => DatasetExporter::SOURCES,
             'splits' => DatasetExporter::SPLITS,
             'maxSamples' => DatasetExporter::MAX_SAMPLES,
+            'quota' => [
+                'limit' => DatasetExporter::RATE_LIMIT_PER_HOUR,
+                'left' => max(0, RateLimiter::remaining($this->rateKey($userId), DatasetExporter::RATE_LIMIT_PER_HOUR)),
+                'note' => DatasetExporter::quotaNote(),
+                'retention' => DatasetExporter::retentionNote(),
+                'has_pending' => DatasetExporter::pendingForUser($userId, $exports) !== null,
+            ],
         ]);
     }
 
@@ -81,6 +94,34 @@ class ExportController extends Controller
         }
 
         $user = $request->user();
+        $userId = (int) ($user?->id ?? 0);
+
+        // لایهٔ ۱ — هم‌زمان فقط یک بسته برای هر کاربر.
+        $pending = DatasetExporter::pendingForUser($userId);
+        if ($pending !== null) {
+            return redirect()->route('dataset.export.index')->with(
+                'warning',
+                'شما همین حالا بستهٔ «'.$pending['token'].'» را در حال ساخت دارید؛ تا تمام شدنش بستهٔ تازه‌ای ساخته نمی‌شود.',
+            );
+        }
+
+        // لایهٔ ۲ — سقف تعداد درخواست در هر ساعت.
+        $rateKey = $this->rateKey($userId);
+        if (RateLimiter::tooManyAttempts($rateKey, DatasetExporter::RATE_LIMIT_PER_HOUR)) {
+            $minutes = max(1, (int) ceil(RateLimiter::availableIn($rateKey) / 60));
+
+            return redirect()->route('dataset.export.index')->with('warning', sprintf(
+                'سقف ساخت %s بسته در هر ساعت پر شده است؛ %s دقیقهٔ دیگر دوباره تلاش کنید.',
+                DatasetExporter::faDigits((string) DatasetExporter::RATE_LIMIT_PER_HOUR),
+                DatasetExporter::faDigits((string) $minutes),
+            ));
+        }
+
+        RateLimiter::hit($rateKey, DatasetExporter::RATE_LIMIT_WINDOW);
+
+        // لایهٔ ۳ — پاک‌سازی خودکار بسته‌های قدیمی پیش از اشغال دیسک تازه.
+        $pruned = DatasetExporter::prune();
+
         $token = DatasetExporter::newToken();
 
         DatasetExporter::writeMeta($token, [
@@ -102,9 +143,18 @@ class ExportController extends Controller
 
         BuildDatasetExport::dispatch($token);
 
+        $message = ['ساخت بستهٔ خروجی در صف قرار گرفت؛ به‌محض آماده شدن، دکمهٔ دانلودش در فهرست پایین فعال می‌شود.'];
+
+        if ($pruned !== []) {
+            $message[] = sprintf(
+                'در همین حال %s بستهٔ قدیمی طبق قانون نگهداری حذف شد.',
+                DatasetExporter::faDigits((string) count($pruned)),
+            );
+        }
+
         return redirect()
             ->route('dataset.export.index')
-            ->with('success', 'ساخت بستهٔ خروجی در صف قرار گرفت؛ به‌محض آماده شدن، دکمهٔ دانلودش در فهرست پایین فعال می‌شود.');
+            ->with('success', $message);
     }
 
     /** وضعیت خروجی‌ها برای به‌روزرسانی خودکار فهرست. */
@@ -171,6 +221,12 @@ class ExportController extends Controller
 
         return redirect()->route('dataset.export.index')
             ->with('success', 'بستهٔ خروجی حذف شد.');
+    }
+
+    /** کلید محدودیت نرخ — برای هر کاربر جداگانه. */
+    private function rateKey(int $userId): string
+    {
+        return 'dataset-export:'.($userId > 0 ? $userId : 'guest');
     }
 
     /** اعتبارسنجی مشترک فرم پیش‌نمایش و فرم ساخت. */

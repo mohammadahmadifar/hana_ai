@@ -145,7 +145,7 @@
                             <span>تصویرها هم داخل بسته باشند</span>
                         </label>
                         <span class="hint" id="imagesHint">
-                            برای قالب Tesseract تصویر اجباری است و همیشه در بسته می‌آید.
+                            در قالب Tesseract به‌جای تصویر تمام‌کارت، تصویر بریده‌شدهٔ هر فیلدِ دارای کادر در بسته می‌آید.
                         </span>
                     </div>
 
@@ -183,6 +183,16 @@
                         <div class="readout" id="previewBox">@include('dataset.export.partials.preview', ['preview' => $preview, 'maxSamples' => $maxSamples])</div>
                     </div>
 
+                    <div class="field">
+                        <span class="label">سهمیهٔ ساخت</span>
+                        <div class="tiny muted stack stack--sm">
+                            <span>{{ $quota['note'] }} در این ساعت <x-num :value="$quota['left']" /> بسته باقی مانده است.</span>
+                            @if ($quota['has_pending'])
+                                <span class="text-warn">یک بستهٔ شما در حال ساخت است؛ تا پایان کارش درخواست تازه ثبت نمی‌شود.</span>
+                            @endif
+                        </div>
+                    </div>
+
                 </div>
                 <div class="card__foot">
                     <button class="btn btn--primary" type="submit" id="submitBtn">ساخت بسته و افزودن به صف</button>
@@ -206,6 +216,8 @@
         </div>
 
         <div class="card__body">
+            <p class="tiny muted">{{ $quota['retention'] }}</p>
+
             @if (count($exports) === 0)
                 <x-empty-state icon="📦" title="هنوز بسته‌ای ساخته نشده"
                                hint="فیلترها را انتخاب کنید و دکمهٔ «ساخت بسته» را بزنید." />
@@ -340,7 +352,7 @@
         includeImages.disabled = isTesseract;
         if (isTesseract) { includeImages.checked = true; }
         imagesHint.textContent = isTesseract
-            ? 'برای قالب Tesseract تصویر اجباری است و همیشه در بسته می‌آید.'
+            ? 'در قالب Tesseract به‌جای تصویر تمام‌کارت، تصویر بریده‌شدهٔ هر فیلدِ دارای کادر در بسته می‌آید.'
             : 'اگر برداریدش، فقط dataset.json ساخته می‌شود و مسیر اصلی تصویر در کلید source_path می‌ماند.';
 
         ratioRow.classList.toggle('hidden', !resplit.checked);

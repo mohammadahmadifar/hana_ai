@@ -262,7 +262,7 @@ class TestImageController extends Controller
 
         return view('testimage.show', [
             'image' => $testImage,
-            'rows' => $this->payloadRows($testImage),
+            'rows' => $this->payloadRows($testImage, $sidecar),
             'applied' => $this->appliedList($testImage),
             'augmentations' => self::AUGMENTATIONS,
             'sidecar' => $sidecar,
@@ -307,7 +307,14 @@ class TestImageController extends Controller
         $checks = [];
         $found = 0;
 
-        foreach ($this->payloadRows($testImage) as $row) {
+        // فیلدی که چیدمان موتور جای چاپش را ندارد (مثل «تاریخ انقضا» گواهینامه)
+        // نه سنجیده می‌شود نه در مخرج نمره می‌آید؛ وگرنه نمره الکی پایین می‌آید.
+        // خودِ صفحه از روی rows می‌گوید کدام فیلد چاپ نشده است.
+        foreach ($this->payloadRows($testImage, $this->readSidecar($testImage)) as $row) {
+            if (! $row['printed']) {
+                continue;
+            }
+
             $hit = PersianValue::foundInText($row['value'], $rawText);
             $found += $hit ? 1 : 0;
 
@@ -582,7 +589,9 @@ class TestImageController extends Controller
             $input = $raw[$field->key] ?? null;
             $input = is_scalar($input) ? (string) $input : '';
 
-            // ارقام انگلیسی کاربر این‌جا فارسی می‌شوند، چون موتور فارسی چاپ می‌کند
+            // شکل قانونی مقدار: ارقام انگلیسی فارسی می‌شوند و جداکننده‌های
+            // خوانایی («۰۰۶-۹۵۳-۷۴۱۰») حذف می‌شوند. همین یک مقدار هم
+            // اعتبارسنجی می‌شود، هم چاپ، هم به‌عنوان برچسب ذخیره — یک منبع حقیقت.
             $value = PersianValue::forEngine($field->value_type, $input);
 
             if ($value === '') {
@@ -593,6 +602,7 @@ class TestImageController extends Controller
                 continue;
             }
 
+            // validate خودش هم از همان forEngine می‌گذرد (خودتکرار است)
             $problem = PersianValue::validate($field->value_type, $value, $field->label_fa);
 
             if ($problem !== null) {
@@ -687,11 +697,25 @@ class TestImageController extends Controller
     /**
      * جدول «چه چیزی روی تصویر چاپ شد» — ترتیب و برچسب از خود نوع مدرک.
      *
-     * @return list<array{key: string, label: string, value: string, type: string}>
+     * پرچم printed می‌گوید آیا موتور واقعاً این فیلد را روی مدرک کشیده است.
+     * نوع مدرک در پنل می‌تواند فیلدی داشته باشد که چیدمان موتور جایی برایش
+     * ندارد (امروز: «تاریخ انقضا»ی گواهینامه، چون hana_engine/layouts.py آن را
+     * نمی‌شناسد). چنین فیلدی نه چاپ می‌شود نه OCR می‌تواند پیدایش کند، پس
+     * نباید در جدول به‌عنوان «چاپ‌شده» جا بزند.
+     *
+     * منبع حقیقتِ «چه چیزی کشیده شد» فایل کنارِ تصویر است. اگر آن فایل نباشد
+     * (تصویر قدیمی) چیزی ادعا نمی‌کنیم و همه چاپ‌شده فرض می‌شوند.
+     *
+     * @param  array<string, mixed>|null  $sidecar
+     * @return list<array{key: string, label: string, value: string, type: string, printed: bool}>
      */
-    private function payloadRows(TestImage $testImage): array
+    private function payloadRows(TestImage $testImage, ?array $sidecar = null): array
     {
         $payload = is_array($testImage->payload) ? $testImage->payload : [];
+
+        $drawn = is_array($sidecar['fields'] ?? null) ? $sidecar['fields'] : null;
+
+        $printed = static fn (string $key): bool => $drawn === null || array_key_exists($key, $drawn);
 
         $rows = [];
         $seen = [];
@@ -708,6 +732,7 @@ class TestImageController extends Controller
                 'label' => $field->label_fa,
                 'value' => (string) $payload[$field->key],
                 'type' => $field->value_type,
+                'printed' => $printed($field->key),
             ];
         }
 
@@ -718,6 +743,7 @@ class TestImageController extends Controller
                     'label' => (string) $key,
                     'value' => (string) $value,
                     'type' => 'text',
+                    'printed' => $printed((string) $key),
                 ];
             }
         }

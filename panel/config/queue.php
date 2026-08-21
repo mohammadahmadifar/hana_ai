@@ -68,7 +68,10 @@ return [
             'driver' => 'redis',
             'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
             'queue' => env('REDIS_QUEUE', 'default'),
-            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 90),
+            // باید از بلندترین timeout جاب بیشتر باشد، وگرنه صف همان جابِ در حال
+            // اجرا را دوباره تحویل می‌دهد و نتیجه دوباره‌کاری یا failed() زودهنگام است.
+            // بلندترین جاب فعلی: GenerateDatasetSamples و BuildDatasetExport با ۹۰۰ ثانیه.
+            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 1200),
             'block_for' => null,
             'after_commit' => false,
         ],

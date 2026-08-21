@@ -26,6 +26,10 @@
     $imagePath = $tab === 'clean' ? $sample->clean_path : $sample->path;
     $boxed = $annotations->filter(fn ($a) => $a->hasBox());
 
+    // مختصات کادرها هنگام تولید روی «تصویر نهایی» (نسخهٔ با اعوجاج) ثبت شده‌اند.
+    // روی «تصویر تمیز» همان مختصات جابه‌جا می‌افتند، پس آن‌جا کادری نمی‌کشیم.
+    $showBoxes = $tab === 'final' && $boxed->isNotEmpty();
+
     /*
      * پارامترهای اعوجاج شکل‌های مختلفی دارند و همه باید خوانا چاپ شوند:
      *   {"rotation": {"enabled": true, "angle": 7}}
@@ -178,7 +182,7 @@
             <div class="card__head">
                 <h2>تصویر نمونه</h2>
                 <span class="spacer"></span>
-                @if ($boxed->isNotEmpty())
+                @if ($showBoxes)
                     <label class="check tiny">
                         <input type="checkbox" id="boxes-toggle" checked>
                         نمایش کادر فیلدها
@@ -201,16 +205,25 @@
                         <div class="shot" id="shot">
                             <img src="{{ route('media', ['disk' => $sample->disk, 'path' => $imagePath]) }}"
                                  alt="تصویر نمونهٔ {{ $fa($sample->id) }}">
-                            @foreach ($boxed as $annotation)
-                                <span class="bx"
-                                      style="left: {{ round(max(0, min(1, $annotation->bbox_x)) * 100, 3) }}%;
-                                             top: {{ round(max(0, min(1, $annotation->bbox_y)) * 100, 3) }}%;
-                                             width: {{ round(max(0, min(1, $annotation->bbox_w)) * 100, 3) }}%;
-                                             height: {{ round(max(0, min(1, $annotation->bbox_h)) * 100, 3) }}%"
-                                      title="{{ $fieldLabels[$annotation->field_key] ?? $annotation->field_key }}"></span>
-                            @endforeach
+                            @if ($showBoxes)
+                                @foreach ($boxed as $annotation)
+                                    <span class="bx"
+                                          style="left: {{ round(max(0, min(1, $annotation->bbox_x)) * 100, 3) }}%;
+                                                 top: {{ round(max(0, min(1, $annotation->bbox_y)) * 100, 3) }}%;
+                                                 width: {{ round(max(0, min(1, $annotation->bbox_w)) * 100, 3) }}%;
+                                                 height: {{ round(max(0, min(1, $annotation->bbox_h)) * 100, 3) }}%"
+                                          title="{{ $fieldLabels[$annotation->field_key] ?? $annotation->field_key }}"></span>
+                                @endforeach
+                            @endif
                         </div>
                     </div>
+
+                    @if ($tab === 'clean' && $boxed->isNotEmpty())
+                        <p class="small muted">
+                            کادرهای فیلد روی «تصویر نهایی» (نسخهٔ با اعوجاج) ثبت شده‌اند و با این تصویر جور درنمی‌آیند؛
+                            برای دیدنشان به تب «تصویر نهایی» بروید.
+                        </p>
+                    @endif
                 @else
                     <x-empty-state icon="🖼" title="فایل تصویر این نما ثبت نشده" />
                 @endif

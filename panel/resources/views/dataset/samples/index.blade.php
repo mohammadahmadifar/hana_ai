@@ -238,7 +238,8 @@
                                         </td>
                                         <td class="thumbcell">
                                             <a class="thumb" href="{{ route('dataset.samples.show', $sample) }}">
-                                                <img src="{{ route('media', ['disk' => $sample->disk, 'path' => $sample->path]) }}"
+                                                {{-- w=200: نسخهٔ بندانگشتی؛ بدون آن هر ردیف یک PNG تمام‌اندازه می‌فرستد --}}
+                                                <img src="{{ route('media', ['disk' => $sample->disk, 'path' => $sample->path, 'w' => 200]) }}"
                                                      alt="تصویر نمونهٔ {{ $sample->id }}" loading="lazy">
                                             </a>
                                         </td>

@@ -124,8 +124,14 @@ class AnnotateController extends Controller
         $byKey = $sample->annotations->keyBy('field_key');
         $definedKeys = $sample->documentType->fields->pluck('key')->all();
 
-        $fields = $sample->documentType->fields->map(function (DocumentTypeField $field) use ($byKey) {
+        // پس از خطای اعتبارسنجی، مقدارها و کادرها از ورودی قبلی کاربر
+        // بازیابی می‌شوند نه از دیتابیس؛ وگرنه همهٔ کار تایپ‌شده و
+        // کادرهای کشیده‌شده دور ریخته می‌شد.
+        $old = $this->oldRows();
+
+        $fields = $sample->documentType->fields->map(function (DocumentTypeField $field) use ($byKey, $old) {
             $annotation = $byKey->get($field->key);
+            $restored = $old[$field->key] ?? null;
 
             return [
                 'key' => $field->key,
@@ -133,8 +139,8 @@ class AnnotateController extends Controller
                 'value_type' => $field->value_type,
                 'required' => (bool) $field->is_required,
                 'cross_checked' => (bool) $field->is_cross_checked,
-                'value' => (string) ($annotation->value ?? ''),
-                'bbox' => $this->boxOf($annotation),
+                'value' => $restored !== null ? $restored['value'] : (string) ($annotation->value ?? ''),
+                'bbox' => $restored !== null ? $restored['bbox'] : $this->boxOf($annotation),
                 'source' => $annotation->source ?? null,
             ];
         })->values();
@@ -218,34 +224,66 @@ class AnnotateController extends Controller
         $boxes = 0;
 
         DB::transaction(function () use ($sample, $clean, $userId, $wantsVerify, &$saved, &$removed, &$boxes) {
-            foreach ($clean as $key => $row) {
-                $isEmpty = $row['value'] === '' && $row['bbox'] === null;
+            $existing = DatasetAnnotation::query()
+                ->where('dataset_sample_id', $sample->id)
+                ->get()
+                ->keyBy('field_key');
 
-                if ($isEmpty) {
-                    $removed += DatasetAnnotation::query()
-                        ->where('dataset_sample_id', $sample->id)
-                        ->where('field_key', $key)
-                        ->delete();
+            foreach ($clean as $key => $row) {
+                /** @var DatasetAnnotation|null $current */
+                $current = $existing->get($key);
+                $currentBox = $this->boxOf($current);
+
+                // نبودِ کلید bbox در درخواست یعنی «به کادر دست نزن»؛ فقط
+                // bbox: null صریح یعنی «کادر را پاک کن».
+                $box = $row['bbox_given'] ? $row['bbox'] : $currentBox;
+
+                if ($row['value'] === '' && $box === null) {
+                    if ($current !== null) {
+                        $current->delete();
+                        $removed++;
+                    }
 
                     continue;
                 }
 
-                DatasetAnnotation::updateOrCreate(
-                    ['dataset_sample_id' => $sample->id, 'field_key' => $key],
-                    [
-                        'value' => $row['value'] === '' ? null : $row['value'],
-                        'bbox_x' => $row['bbox']['x'] ?? null,
-                        'bbox_y' => $row['bbox']['y'] ?? null,
-                        'bbox_w' => $row['bbox']['w'] ?? null,
-                        'bbox_h' => $row['bbox']['h'] ?? null,
-                        'source' => 'manual',
-                        'created_by' => $userId,
-                    ],
-                );
+                $valueChanged = $current === null
+                    || (string) ($current->value ?? '') !== $row['value'];
+                // کادرِ ذخیره‌شده‌ای که کمی بیرون از تصویر است، سمت مرورگر به لبه
+                // چسبانده می‌شود. اگر خام با خام مقایسه کنیم، «ذخیرهٔ بدون تغییر»
+                // یک تغییر جعلی می‌سازد و برچسب ژنراتور را «دستی» می‌کند.
+                // پس مبنای مقایسه، نسخهٔ چسبانده‌شدهٔ همان کادر ذخیره‌شده است.
+                $boxChanged = $current === null
+                    || ! $this->sameBox($this->clampBox($currentBox), $box);
+
+                $attributes = [
+                    'value' => $row['value'] === '' ? null : $row['value'],
+                    'bbox_x' => $box['x'] ?? null,
+                    'bbox_y' => $box['y'] ?? null,
+                    'bbox_w' => $box['w'] ?? null,
+                    'bbox_h' => $box['h'] ?? null,
+                ];
+
+                // فقط فیلدی که واقعاً عوض شده «دستی» می‌شود؛ برچسب
+                // دست‌نخوردهٔ ژنراتور باید generated بماند، چون همین ستون
+                // در خروجی آموزش استفاده می‌شود.
+                if ($valueChanged || $boxChanged) {
+                    $attributes['source'] = 'manual';
+                    $attributes['created_by'] = $userId;
+
+                    if ($current === null) {
+                        DatasetAnnotation::create($attributes + [
+                            'dataset_sample_id' => $sample->id,
+                            'field_key' => $key,
+                        ]);
+                    } else {
+                        $current->fill($attributes)->save();
+                    }
+                }
 
                 $saved++;
 
-                if ($row['bbox'] !== null) {
+                if ($box !== null) {
                     $boxes++;
                 }
             }
@@ -266,7 +304,7 @@ class AnnotateController extends Controller
 
         if ($action === 'next' && $next === null) {
             $target = route('dataset.annotate.index');
-            $extra = 'نمونهٔ بعدی‌ای در صف نمانده است.';
+            $extra = 'صف تگ‌گذاری خالی شد.';
         } elseif ($next !== null) {
             $target = route('dataset.annotate.edit', $next);
             $extra = null;
@@ -366,11 +404,31 @@ class AnnotateController extends Controller
             ->orderBy('dataset_samples.id');
     }
 
-    /** نمونهٔ بعدی صف پس از نمونهٔ جاری (برای دکمهٔ «ذخیره و بعدی»). */
+    /**
+     * نمونهٔ بعدی صف پس از نمونهٔ جاری (برای دکمهٔ «ذخیره و بعدی»).
+     *
+     * «بعدی» یعنی نزدیک‌ترین نمونهٔ صف با شناسهٔ بزرگ‌تر از نمونهٔ جاری، نه
+     * سرِ صف؛ وگرنه کاربر میان دو نمونه رفت‌وبرگشت می‌کرد و هرگز به سومی
+     * نمی‌رسید. اگر بزرگ‌تری نماند، از سرِ صف دوباره شروع می‌کنیم و اگر
+     * صف خالی شد، null برمی‌گردد.
+     */
     private function nextInQueue(DatasetSample $sample): ?DatasetSample
     {
+        $after = $this->queue('pending')
+            ->reorder()
+            ->where('dataset_samples.id', '>', $sample->getKey())
+            ->orderBy('dataset_samples.id')
+            ->first();
+
+        if ($after !== null) {
+            return $after;
+        }
+
+        // دور زدن: برگشت به سرِ صف (کوچک‌ترین شناسهٔ باقی‌مانده).
         return $this->queue('pending')
+            ->reorder()
             ->whereKeyNot($sample->getKey())
+            ->orderBy('dataset_samples.id')
             ->first();
     }
 
@@ -397,6 +455,134 @@ class AnnotateController extends Controller
             'w' => (float) $annotation->bbox_w,
             'h' => (float) $annotation->bbox_h,
         ];
+    }
+
+    /**
+     * ورودی قبلی فرم (پس از خطای اعتبارسنجی): [کلید فیلد => مقدار و کادر].
+     *
+     * ساختار ناسالم بی‌سروصدا نادیده گرفته می‌شود تا صفحه با دادهٔ خراب
+     * هم بالا بیاید؛ مقدار همان چیزی است که کاربر تایپ کرده بود.
+     *
+     * @return array<string, array{value: string, bbox: array{x: float, y: float, w: float, h: float}|null}>
+     */
+    private function oldRows(): array
+    {
+        $raw = old('payload');
+
+        if (! is_string($raw) || trim($raw) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+
+        if (! is_array($decoded)) {
+            return [];
+        }
+
+        $out = [];
+
+        foreach ($decoded as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $key = $row['field_key'] ?? null;
+
+            if (! is_string($key) || $key === '') {
+                continue;
+            }
+
+            $value = $row['value'] ?? '';
+
+            if (is_numeric($value)) {
+                $value = (string) $value;
+            }
+
+            $out[$key] = [
+                'value' => is_string($value) ? $value : '',
+                'bbox' => $this->plainBox($row['bbox'] ?? null),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * کادر خام ورودی قبلی — فقط عدد بودن بررسی می‌شود، نه محدوده؛ کادر
+     * بیرون‌زده هم باید برگردد تا کاربر خودش اصلاحش کند.
+     *
+     * @return array{x: float, y: float, w: float, h: float}|null
+     */
+    private function plainBox(mixed $bbox): ?array
+    {
+        if (! is_array($bbox)) {
+            return null;
+        }
+
+        $out = [];
+
+        foreach (['x', 'y', 'w', 'h'] as $axis) {
+            $raw = $bbox[$axis] ?? null;
+
+            if (! is_numeric($raw) || ! is_finite((float) $raw)) {
+                return null;
+            }
+
+            $out[$axis] = round((float) $raw, 6);
+        }
+
+        return $out['w'] > 0 && $out['h'] > 0 ? $out : null;
+    }
+
+    /**
+     * چسباندن کادر به لبه‌های تصویر، با همان قاعده‌ای که سمت مرورگر اعمال می‌شود.
+     *
+     * @param  array{x: float, y: float, w: float, h: float}|null  $box
+     * @return array{x: float, y: float, w: float, h: float}|null
+     */
+    private function clampBox(?array $box): ?array
+    {
+        if ($box === null) {
+            return null;
+        }
+
+        // باید دقیقاً برابر MIN در resources/views/dataset/annotate/edit.blade.php باشد
+        $min = 0.004;
+
+        $clamp = static fn (float $v, float $low, float $high): float => max($low, min($v, max($low, $high)));
+
+        $x = $clamp((float) ($box['x'] ?? 0), 0, 1 - $min);
+        $y = $clamp((float) ($box['y'] ?? 0), 0, 1 - $min);
+        $w = $clamp((float) ($box['w'] ?? 0), $min, 1 - $x);
+        $h = $clamp((float) ($box['h'] ?? 0), $min, 1 - $y);
+
+        return [
+            'x' => round($x, 6),
+            'y' => round($y, 6),
+            'w' => round($w, 6),
+            'h' => round($h, 6),
+        ];
+    }
+
+    /**
+     * برابری دو کادر با رواداری گرد کردن ممیز شناور.
+     *
+     * @param  array{x: float, y: float, w: float, h: float}|null  $a
+     * @param  array{x: float, y: float, w: float, h: float}|null  $b
+     */
+    private function sameBox(?array $a, ?array $b): bool
+    {
+        if ($a === null || $b === null) {
+            return $a === null && $b === null;
+        }
+
+        foreach (['x', 'y', 'w', 'h'] as $axis) {
+            if (abs(($a[$axis] ?? 0.0) - ($b[$axis] ?? 0.0)) > 0.0000005) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -485,7 +671,7 @@ class AnnotateController extends Controller
      * @param  array<int, mixed>  $rows
      * @param  array<int, string>  $allowed
      * @param  array<string, string>  $labels
-     * @return array<string, array{value: string, bbox: array{x: float, y: float, w: float, h: float}|null}>
+     * @return array<string, array{value: string, bbox: array{x: float, y: float, w: float, h: float}|null, bbox_given: bool}>
      */
     private function validateRows(array $rows, array $allowed, array $labels): array
     {
@@ -542,15 +728,18 @@ class AnnotateController extends Controller
                 continue;
             }
 
-            $bbox = $this->normalizeBox($row['bbox'] ?? null, $labels[$key] ?? $key, $error);
+            // فرق «کلید bbox اصلاً نیامده» با «bbox: null» مهم است: اولی
+            // یعنی کادر موجود دست‌نخورده بماند، دومی یعنی پاکش کن.
+            $given = array_key_exists('bbox', $row);
+            $bbox = $given ? $this->normalizeBox($row['bbox'], $labels[$key] ?? $key, $error) : null;
 
-            if ($error !== null) {
+            if ($given && $error !== null) {
                 $errors[$slot.'.bbox'] = $error;
 
                 continue;
             }
 
-            $clean[$key] = ['value' => $value, 'bbox' => $bbox];
+            $clean[$key] = ['value' => $value, 'bbox' => $bbox, 'bbox_given' => $given];
         }
 
         if ($errors !== []) {

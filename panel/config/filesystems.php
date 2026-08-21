@@ -61,6 +61,14 @@ return [
             'throw' => false,
         ],
 
+        // کش بندانگشتی — بازتولیدشدنی، هر وقت خواستی می‌شود پاکش کرد
+        'thumbs' => [
+            'driver' => 'local',
+            'root' => storage_path('app/private/thumbs'),
+            'serve' => false,
+            'throw' => false,
+        ],
+
         'exports' => [
             'driver' => 'local',
             'root' => storage_path('app/private/exports'),

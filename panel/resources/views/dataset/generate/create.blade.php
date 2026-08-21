@@ -87,6 +87,12 @@
                     @error('document_type_ids')
                         <span class="error">{{ $message }}</span>
                     @enderror
+
+                    {{-- خطای «یک عضو آرایه» کلید دیگری دارد (document_type_ids.0) و اگر جدا
+                         نشان داده نشود، کاربر می‌بیند فرم برگشته ولی دلیلش را کنار همان فیلد نمی‌بیند. --}}
+                    @error('document_type_ids.*')
+                        <span class="error">{{ $message }}</span>
+                    @enderror
                 </div>
             </div>
         </div>
@@ -218,6 +224,10 @@
                             </div>
                         @endif
                         @error('tag_ids')
+                            <span class="error">{{ $message }}</span>
+                        @enderror
+
+                        @error('tag_ids.*')
                             <span class="error">{{ $message }}</span>
                         @enderror
                     </div>

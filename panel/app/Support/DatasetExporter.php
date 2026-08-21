@@ -21,8 +21,8 @@ use ZipArchive;
  *
  * قالب‌های خروجی:
  *   json      → یک فایل dataset.json با ساختار {meta, samples[]} (+ پوشهٔ images)
- *   tesseract → برای هر تصویر یک .gt.txt (متن) و یک .box (کادر کاراکترها،
- *               مبدأ پایین-چپ) در کنار کپی تصویر
+ *   tesseract → برای هر فیلدِ دارای کادر، تصویرِ بریده‌شدهٔ همان کادر (یک خط)
+ *               به‌همراه یک .gt.txt تک‌خطی و یک .box با مختصات داخل همان برش
  */
 class DatasetExporter
 {
@@ -38,12 +38,12 @@ class DatasetExporter
 
     public const FORMATS = [
         'json' => 'JSON یکپارچه',
-        'tesseract' => 'Tesseract box',
+        'tesseract' => 'Tesseract — خط‌های بریده‌شده',
     ];
 
     public const FORMAT_HINTS = [
         'json' => 'یک فایل dataset.json با متادیتا، مقدار فیلدها و کادرها (نسبی ۰ تا ۱) به‌همراه تصویرها.',
-        'tesseract' => 'برای هر تصویر یک فایل .gt.txt و یک فایل .box با کادر کاراکترها (مبدأ پایین-چپ) — ورودی مستقیم tesstrain.',
+        'tesseract' => 'برای هر فیلدِ دارای کادر، تصویر همان کادر بریده می‌شود و کنارش یک .gt.txt تک‌خطی و یک .box می‌آید — ورودی مستقیم tesstrain. فیلدهای بدون کادر و نمونه‌های بدون تصویر در این قالب خروجی ندارند.',
     ];
 
     public const STATUS_LABELS = [
@@ -73,6 +73,40 @@ class DatasetExporter
 
     /** سقف نمونه در هر بسته — نگهبان مصرف حافظه و دیسک. */
     public const MAX_SAMPLES = 5000;
+
+    /* ------------------------------------------------------------------
+     | سهمیهٔ دیسک — اعداد ثابت‌اند و همین‌ها در رابط کاربری نوشته می‌شوند.
+     * ------------------------------------------------------------------ */
+
+    /** سقف درخواست ساخت بسته برای هر کاربر در هر ساعت. */
+    public const RATE_LIMIT_PER_HOUR = 3;
+
+    /** پنجرهٔ محدودیت نرخ به ثانیه. */
+    public const RATE_LIMIT_WINDOW = 3600;
+
+    /** بیشترین تعداد بسته‌ای که روی دیسک نگه داشته می‌شود. */
+    public const KEEP_LAST = 20;
+
+    /** بیشترین عمر یک بسته به روز. */
+    public const KEEP_DAYS = 7;
+
+    /**
+     * سقف مجموع حجم بسته‌ها روی دیسک (۲ گیگابایت). یک بستهٔ JSON با تصویر
+     * می‌تواند بیش از صد مگابایت باشد، پس شمردن تعداد به‌تنهایی دیسک را
+     * محدود نمی‌کند.
+     */
+    public const KEEP_BYTES = 2147483648;
+
+    /**
+     * بعد از این تعداد دقیقه، بستهٔ «در صف/در حال ساخت» مرده حساب می‌شود.
+     * سقف واقعی کار = timeout جاب (۹۰۰ ثانیه) + retry_after صف (۱۲۰۰ ثانیه)
+     * یعنی ۳۵ دقیقه؛ ۴۵ دقیقه با حاشیهٔ امن. بدون این، کشته‌شدن کارگر کاربر
+     * را برای همیشه پشت قانون «هم‌زمان یک بسته» زندانی می‌کرد.
+     */
+    public const PENDING_STALE_MINUTES = 45;
+
+    /** حاشیهٔ اطراف هر خط بریده‌شده، نسبت به ارتفاع همان فیلد. */
+    public const LINE_PADDING_RATIO = 0.12;
 
     /* ==================================================================
      | فیلترها و گزینه‌ها
@@ -395,6 +429,152 @@ class DatasetExporter
         return $removed;
     }
 
+    /**
+     * بستهٔ در حال ساخت (در صف یا در حال اجرا) متعلق به همین کاربر.
+     * هر کاربر هم‌زمان فقط یک بسته می‌سازد تا صف و دیسک را قرق نکند.
+     *
+     * اگر فهرست بسته‌ها را همین حالا خوانده‌اید، همان را پاس بدهید تا دیسک
+     * دو بار خوانده نشود.
+     */
+    public static function pendingForUser(?int $userId, ?array $rows = null): ?array
+    {
+        if ($userId === null || $userId <= 0) {
+            return null;
+        }
+
+        foreach ($rows ?? self::listAll() as $row) {
+            if (! ($row['is_pending'] ?? false) || self::isStalePending($row)) {
+                continue;
+            }
+
+            if ((int) ($row['created_by']['id'] ?? 0) === $userId) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * پاک‌سازی خودکار بسته‌ها: فقط KEEP_LAST بستهٔ تازه‌تر می‌ماند، هر بستهٔ
+     * قدیمی‌تر از KEEP_DAYS روز حذف می‌شود و در پایان مجموع حجم هم به زیر
+     * KEEP_BYTES می‌آید. بسته‌های در حال ساخت هرگز حذف نمی‌شوند.
+     * خروجی: فهرست شناسهٔ بسته‌های حذف‌شده.
+     *
+     * @return array<int, string>
+     */
+    public static function prune(): array
+    {
+        $rows = self::listAll(); // تازه‌ترین اول
+        $cutoff = Carbon::now()->subDays(self::KEEP_DAYS);
+        $removed = [];
+
+        foreach (array_values($rows) as $index => $row) {
+            if ($row['is_pending'] ?? false) {
+                // کارگر وسط کار کشته شده: وضعیت را واقعی کن تا نه صف را قفل
+                // کند نه از پاک‌سازی دور بماند.
+                if (self::isStalePending($row)) {
+                    $row['status'] = 'failed';
+                    $row['finished_at'] = Carbon::now()->toIso8601String();
+                    $row['error'] = 'ساخت این بسته نیمه‌کاره ماند و بیش از حد طول کشید.';
+                    unset($row['is_pending'], $row['status_label'], $row['status_tone'], $row['size_human'], $row['has_zip'], $row['size']);
+                    self::writeMeta((string) $row['token'], $row);
+                }
+
+                continue;
+            }
+
+            $tooMany = $index >= self::KEEP_LAST;
+            $tooOld = false;
+
+            $createdAt = $row['created_at'] ?? null;
+            if (is_string($createdAt) && $createdAt !== '') {
+                try {
+                    $tooOld = Carbon::parse($createdAt)->lt($cutoff);
+                } catch (\Throwable) {
+                    $tooOld = false;
+                }
+            }
+
+            if (($tooMany || $tooOld) && self::forget((string) $row['token'])) {
+                $removed[] = (string) $row['token'];
+            }
+        }
+
+        return array_merge($removed, self::pruneBySize());
+    }
+
+    /**
+     * تا وقتی مجموع حجم بسته‌ها از KEEP_BYTES بیشتر است، قدیمی‌ترین بستهٔ
+     * آماده حذف می‌شود. بسته‌های در حال ساخت دست‌نخورده می‌مانند.
+     *
+     * @return array<int, string>
+     */
+    private static function pruneBySize(): array
+    {
+        $rows = self::listAll(); // تازه‌ترین اول
+        $total = 0;
+
+        foreach ($rows as $row) {
+            $total += (int) ($row['size'] ?? 0);
+        }
+
+        $removed = [];
+
+        foreach (array_reverse($rows) as $row) { // از قدیمی‌ترین
+            if ($total <= self::KEEP_BYTES) {
+                break;
+            }
+
+            if ($row['is_pending'] ?? false) {
+                continue;
+            }
+
+            if (self::forget((string) $row['token'])) {
+                $total -= (int) ($row['size'] ?? 0);
+                $removed[] = (string) $row['token'];
+            }
+        }
+
+        return $removed;
+    }
+
+    /** بستهٔ در حال ساختی که دیگر کارگری پشتش نیست. */
+    private static function isStalePending(array $row): bool
+    {
+        $moment = $row['started_at'] ?? $row['created_at'] ?? null;
+
+        if (! is_string($moment) || $moment === '') {
+            return false;
+        }
+
+        try {
+            return Carbon::parse($moment)->lt(Carbon::now()->subMinutes(self::PENDING_STALE_MINUTES));
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /** متن فارسی قانون نگهداری برای نمایش در رابط کاربری و README. */
+    public static function retentionNote(): string
+    {
+        return sprintf(
+            'نگهداری خودکار: حداکثر %s بستهٔ آخر، حداکثر %s روز و مجموعاً حداکثر %s؛ بسته‌های قدیمی‌تر هنگام ثبت درخواست تازه خودکار حذف می‌شوند.',
+            self::faDigits((string) self::KEEP_LAST),
+            self::faDigits((string) self::KEEP_DAYS),
+            self::humanSize(self::KEEP_BYTES),
+        );
+    }
+
+    /** متن فارسی سهمیهٔ ساخت برای نمایش در رابط کاربری. */
+    public static function quotaNote(): string
+    {
+        return sprintf(
+            'سقف ساخت: %s بسته در هر ساعت برای هر کاربر و هم‌زمان فقط یک بسته.',
+            self::faDigits((string) self::RATE_LIMIT_PER_HOUR),
+        );
+    }
+
     public static function humanSize(int $bytes): string
     {
         if ($bytes <= 0) {
@@ -454,6 +634,7 @@ class DatasetExporter
         self::writeMeta($token, $meta);
 
         $temporaryFiles = [];
+        $cropDirectory = $options['format'] === 'tesseract' ? self::makeTempDirectory() : null;
 
         try {
             $total = min((int) $this->baseQuery($filters)->count(), self::MAX_SAMPLES);
@@ -471,6 +652,8 @@ class DatasetExporter
                 'missing_images' => 0,
                 'annotations' => 0,
                 'boxes' => 0,
+                'lines' => 0,
+                'samples_without_lines' => 0,
                 'by_type' => [],
                 'by_split' => ['train' => 0, 'val' => 0, 'test' => 0],
                 'by_field' => [],
@@ -502,7 +685,7 @@ class DatasetExporter
                 ->orderBy('id');
 
             foreach ($query->lazyById(100)->take($total) as $sample) {
-                $row = $this->collectSample($sample, $options, $token, $fieldLabels, $stats);
+                $row = $this->collectSample($sample, $options, $token, $fieldLabels, $stats, $cropDirectory);
 
                 if ($options['format'] === 'json') {
                     fwrite($handle, ($isFirstSample ? '' : ",\n").json_encode(
@@ -515,11 +698,13 @@ class DatasetExporter
                         $zip->addFile($row['image_absolute'], $row['image_entry']);
                     }
                 } else {
-                    if ($row['image_absolute'] !== null) {
-                        $zip->addFile($row['image_absolute'], $row['image_entry']);
+                    // هر «خط» یک سه‌تایی است: تصویر برش‌خورده، متن تک‌خطی و کادر کاراکترها.
+                    foreach ($row['lines'] as $line) {
+                        $zip->addFile($line['image_path'], $line['image_entry']);
+                        $zip->addFromString($line['gt_entry'], $line['gt_text']);
+                        $zip->addFromString($line['box_entry'], $line['box_text']);
+                        $temporaryFiles[] = $line['image_path'];
                     }
-                    $zip->addFromString($row['gt_entry'], $row['gt_text']);
-                    $zip->addFromString($row['box_entry'], $row['box_text']);
                 }
 
                 $processed++;
@@ -595,6 +780,16 @@ class DatasetExporter
                     @unlink($temporaryFile);
                 }
             }
+
+            if ($cropDirectory !== null && is_dir($cropDirectory)) {
+                foreach ((array) glob($cropDirectory.'/*') as $leftover) {
+                    if (is_string($leftover) && is_file($leftover)) {
+                        @unlink($leftover);
+                    }
+                }
+
+                @rmdir($cropDirectory);
+            }
         }
     }
 
@@ -619,9 +814,9 @@ class DatasetExporter
     /**
      * یک نمونه را به سطر خروجی تبدیل می‌کند و آمار را به‌روز می‌کند.
      *
-     * @return array{json: array, image_absolute: ?string, image_entry: string, gt_entry: string, gt_text: string, box_entry: string, box_text: string}
+     * @return array{json: array, image_absolute: ?string, image_entry: string, lines: array<int, array<string, string>>}
      */
-    private function collectSample(DatasetSample $sample, array $options, string $token, array $fieldLabels, array &$stats): array
+    private function collectSample(DatasetSample $sample, array $options, string $token, array $fieldLabels, array &$stats, ?string $cropDirectory = null): array
     {
         $typeKey = $sample->documentType?->key ?? 'unknown';
         $typeLabel = $sample->documentType?->label_fa ?? 'نامشخص';
@@ -662,11 +857,13 @@ class DatasetExporter
             $stats['missing_images']++;
         }
 
-        $wantsImage = $options['include_images'] && $imageAbsolute !== null;
+        $isTesseract = $options['format'] === 'tesseract';
 
-        $imageEntry = $options['format'] === 'tesseract'
-            ? $split.'/'.$base.'.'.$extension
-            : 'images/'.$base.'.'.$extension;
+        // در قالب tesseract تصویر تمام‌کارت وارد بسته نمی‌شود؛ به‌جایش برای هر
+        // فیلدِ دارای کادر یک تصویر تک‌خطی بریده می‌شود.
+        $wantsImage = ! $isTesseract && $options['include_images'] && $imageAbsolute !== null;
+
+        $imageEntry = 'images/'.$base.'.'.$extension;
 
         if ($wantsImage) {
             $stats['images']++;
@@ -683,8 +880,7 @@ class DatasetExporter
         )));
 
         $fields = [];
-        $gtLines = [];
-        $boxLines = [];
+        $lineSpecs = [];
 
         foreach ($keys as $key) {
             $annotation = $annotations->get($key);
@@ -726,16 +922,17 @@ class DatasetExporter
                 ] : null,
             ];
 
-            if ($value !== '') {
-                $gtLines[] = $value;
-            }
+            // متن tesstrain باید تک‌خطی باشد؛ هر فاصلهٔ اضافه یا شکست خط یکسان می‌شود.
+            $lineValue = trim((string) preg_replace('/\s+/u', ' ', $value));
 
-            if ($options['format'] === 'tesseract' && $hasBox && $value !== '' && $width > 0 && $height > 0) {
-                foreach ($this->charBoxes($value, $annotation, $width, $height) as $line) {
-                    $boxLines[] = $line;
-                }
+            if ($isTesseract && $hasBox && $lineValue !== '') {
+                $lineSpecs[] = ['key' => $key, 'value' => $lineValue, 'annotation' => $annotation];
             }
         }
+
+        $lines = $isTesseract
+            ? $this->lineFiles($lineSpecs, $imageAbsolute, $split, $base, $cropDirectory, $stats)
+            : [];
 
         return [
             'json' => [
@@ -756,11 +953,126 @@ class DatasetExporter
             ],
             'image_absolute' => $imageAbsolute,
             'image_entry' => $imageEntry,
-            'gt_entry' => $split.'/'.$base.'.gt.txt',
-            'gt_text' => implode("\n", $gtLines)."\n",
-            'box_entry' => $split.'/'.$base.'.box',
-            'box_text' => $boxLines === [] ? '' : implode("\n", $boxLines)."\n",
+            'lines' => $lines,
         ];
+    }
+
+    /** پوشهٔ موقت برش‌ها؛ در پایان ساخت کامل پاک می‌شود. */
+    private static function makeTempDirectory(): string
+    {
+        $path = sys_get_temp_dir().'/hana-lines-'.bin2hex(random_bytes(6));
+
+        if (! @mkdir($path, 0700, true) && ! is_dir($path)) {
+            throw new RuntimeException('ساخت پوشهٔ موقت برای بریدن خط‌ها ممکن نشد.');
+        }
+
+        return $path;
+    }
+
+    /**
+     * تبدیل هر فیلدِ دارای کادر به یک نمونهٔ آموزشی tesstrain:
+     * تصویر بریده‌شدهٔ همان کادر + یک .gt.txt تک‌خطی + یک .box با مختصات
+     * کاراکترها *داخل همان برش*. فیلد بدون کادر یا نمونهٔ بدون تصویر خروجی
+     * ندارد؛ شمارشش در آمار می‌آید.
+     *
+     * @param  array<int, array{key: string, value: string, annotation: mixed}>  $specs
+     * @return array<int, array<string, string>>
+     */
+    private function lineFiles(array $specs, ?string $imageAbsolute, string $split, string $base, ?string $cropDirectory, array &$stats): array
+    {
+        if ($specs === [] || $imageAbsolute === null || $cropDirectory === null) {
+            $stats['samples_without_lines']++;
+
+            return [];
+        }
+
+        $source = @imagecreatefromstring((string) @file_get_contents($imageAbsolute));
+
+        if ($source === false) {
+            $stats['samples_without_lines']++;
+
+            return [];
+        }
+
+        $imageWidth = imagesx($source);
+        $imageHeight = imagesy($source);
+        $lines = [];
+
+        try {
+            foreach (array_values($specs) as $index => $spec) {
+                $annotation = $spec['annotation'];
+
+                $fieldLeft = (float) $annotation->bbox_x * $imageWidth;
+                $fieldTop = (float) $annotation->bbox_y * $imageHeight;
+                $fieldWidth = (float) $annotation->bbox_w * $imageWidth;
+                $fieldHeight = (float) $annotation->bbox_h * $imageHeight;
+
+                $padding = max(2, (int) round($fieldHeight * self::LINE_PADDING_RATIO));
+
+                $cropLeft = max(0, (int) floor($fieldLeft) - $padding);
+                $cropTop = max(0, (int) floor($fieldTop) - $padding);
+                $cropWidth = min((int) ceil($fieldWidth) + (2 * $padding), $imageWidth - $cropLeft);
+                $cropHeight = min((int) ceil($fieldHeight) + (2 * $padding), $imageHeight - $cropTop);
+
+                // برش خیلی کوچک به درد آموزش نمی‌خورد.
+                if ($cropWidth < 4 || $cropHeight < 4) {
+                    continue;
+                }
+
+                $crop = imagecrop($source, [
+                    'x' => $cropLeft,
+                    'y' => $cropTop,
+                    'width' => $cropWidth,
+                    'height' => $cropHeight,
+                ]);
+
+                if ($crop === false) {
+                    continue;
+                }
+
+                // نام فایل فقط از کلید فیلد و شناسهٔ نمونه ساخته می‌شود.
+                $safeKey = (string) preg_replace('/[^A-Za-z0-9_-]/', '', (string) $spec['key']);
+                $name = sprintf('%s-%02d-%s', $base, $index + 1, $safeKey !== '' ? $safeKey : 'field');
+                $path = $cropDirectory.'/'.$name.'.png';
+
+                $written = @imagepng($crop, $path, 6);
+                imagedestroy($crop);
+
+                if ($written !== true || ! is_file($path)) {
+                    continue;
+                }
+
+                $boxLines = $this->charBoxes(
+                    $spec['value'],
+                    $fieldLeft - $cropLeft,
+                    $fieldTop - $cropTop,
+                    $fieldWidth,
+                    $fieldHeight,
+                    $cropWidth,
+                    $cropHeight,
+                );
+
+                $stats['lines']++;
+                $stats['images']++;
+
+                $lines[] = [
+                    'image_path' => $path,
+                    'image_entry' => $split.'/'.$name.'.png',
+                    'gt_entry' => $split.'/'.$name.'.gt.txt',
+                    'gt_text' => $spec['value']."\n",
+                    'box_entry' => $split.'/'.$name.'.box',
+                    'box_text' => $boxLines === [] ? '' : implode("\n", $boxLines)."\n",
+                ];
+            }
+        } finally {
+            imagedestroy($source);
+        }
+
+        if ($lines === []) {
+            $stats['samples_without_lines']++;
+        }
+
+        return $lines;
     }
 
     /** ابعاد تصویر: اول از دیتابیس، اگر نبود از خود فایل. */
@@ -782,22 +1094,18 @@ class DatasetExporter
 
     /**
      * کادر کاراکترها به فرمت tesseract: «کاراکتر چپ پایین راست بالا صفحه».
-     * مبدأ مختصات tesseract پایین-چپ تصویر است، اما کادر فیلد نسبت به
-     * گوشهٔ بالا-چپ ذخیره شده؛ پس محور y برعکس می‌شود.
+     * مختصات ورودی پیکسلی و نسبت به گوشهٔ بالا-چپ همان تصویری است که فایل
+     * .box کنارش می‌نشیند (یعنی برشِ تک‌خطی)، اما مبدأ tesseract پایین-چپ
+     * است؛ پس محور y برعکس می‌شود.
      */
-    private function charBoxes(string $value, $annotation, int $width, int $height): array
+    private function charBoxes(string $value, float $left, float $top, float $boxWidth, float $boxHeight, int $width, int $height): array
     {
         $characters = mb_str_split($value);
         $count = count($characters);
 
-        if ($count === 0) {
+        if ($count === 0 || $width <= 0 || $height <= 0 || $boxWidth <= 0 || $boxHeight <= 0) {
             return [];
         }
-
-        $left = (float) $annotation->bbox_x * $width;
-        $top = (float) $annotation->bbox_y * $height;
-        $boxWidth = (float) $annotation->bbox_w * $width;
-        $boxHeight = (float) $annotation->bbox_h * $height;
 
         // جهت نوشتار: اگر بعد از حذف ارقام فارسی/عربی حرفی از خط عربی بماند،
         // متن راست‌چین است و کاراکتر اول در سمت راست کادر می‌نشیند.
@@ -908,6 +1216,14 @@ class DatasetExporter
         $lines[] = '  تعداد برچسب فیلدها     : '.$fa($stats['annotations']);
         $lines[] = '  تعداد کادرهای موجود    : '.$fa($stats['boxes']);
 
+        if ($options['format'] === 'tesseract') {
+            $lines[] = '  تعداد خط‌های بریده‌شده  : '.$fa($stats['lines'] ?? 0);
+
+            if (($stats['samples_without_lines'] ?? 0) > 0) {
+                $lines[] = '  نمونه‌های بدون خط      : '.$fa($stats['samples_without_lines']).' (کادر یا تصویر نداشتند)';
+            }
+        }
+
         if ($stats['missing_images'] > 0) {
             $lines[] = '  تصویرهای گم‌شده روی دیسک: '.$fa($stats['missing_images']);
         }
@@ -960,16 +1276,25 @@ class DatasetExporter
         } else {
             $lines[] = '  README.txt          همین گزارش';
             $lines[] = '  train/ val/ test/   بر اساس بخش هر نمونه';
-            $lines[] = '    <نوع>-<شناسه>.<پسوند>   تصویر نمونه';
-            $lines[] = '    <نوع>-<شناسه>.gt.txt    متن درست (هر فیلد در یک خط)';
-            $lines[] = '    <نوع>-<شناسه>.box       کادر کاراکترها به فرمت tesseract:';
-            $lines[] = '        «کاراکتر چپ پایین راست بالا صفحه» — مبدأ پایین-چپ تصویر،';
-            $lines[] = '        واحد پیکسل. کاراکترهای فیلدهای بدون کادر نوشته نمی‌شوند.';
-            $lines[] = '        کادر هر کاراکتر با تقسیم مساوی عرض کادر فیلد به‌دست می‌آید و';
-            $lines[] = '        برای متن فارسی از راست به چپ چیده می‌شود.';
+            $lines[] = '    <نوع>-<شناسه>-<شماره>-<فیلد>.png     تصویرِ بریده‌شدهٔ همان فیلد (یک خط)';
+            $lines[] = '    <نوع>-<شناسه>-<شماره>-<فیلد>.gt.txt  متن درست همان خط، دقیقاً یک خط';
+            $lines[] = '    <نوع>-<شناسه>-<شماره>-<فیلد>.box     کادر کاراکترها به فرمت tesseract';
+            $lines[] = '';
+            $lines[] = '  هر سه فایل هم‌نام‌اند؛ همین چیزی است که tesstrain می‌خواهد: تصویر تک‌خطی';
+            $lines[] = '  در کنار gt تک‌خطی. برای آموزش، پوشهٔ train را به GROUND_TRUTH_DIR بدهید';
+            $lines[] = '  (یا پوشه‌ها را کنار هم بریزید) و بعد:';
+            $lines[] = '      make training MODEL_NAME=hana START_MODEL=fas GROUND_TRUTH_DIR=./train';
+            $lines[] = '';
+            $lines[] = '  برش با حاشیهٔ '.$fa((int) round(self::LINE_PADDING_RATIO * 100)).'٪ ارتفاع فیلد (دست‌کم ۲ پیکسل) انجام می‌شود.';
+            $lines[] = '  فایل .box: «کاراکتر چپ پایین راست بالا صفحه» — مبدأ پایین-چپِ همان برش،';
+            $lines[] = '  واحد پیکسل. کادر هر کاراکتر با تقسیم مساوی عرض فیلد به‌دست می‌آید و برای';
+            $lines[] = '  متن فارسی از راست به چپ چیده می‌شود؛ پس تقریبی است و برای LSTM لازم نیست.';
+            $lines[] = '  فیلدهای بدون کادر و نمونه‌های بدون تصویر در این قالب خروجی ندارند.';
+            $lines[] = '  تصویر تمام‌کارت در این بسته نیست؛ برای آن از قالب «JSON یکپارچه» استفاده کنید.';
         }
 
         $lines[] = '';
+        $lines[] = self::retentionNote();
         $lines[] = 'همهٔ داده‌های این بسته ساختگی و خروجی ژنراتور سامانه است.';
         $lines[] = '';
 

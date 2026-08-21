@@ -63,13 +63,16 @@ class SampleController extends Controller
     /** فهرست نمونه‌ها با پالایش و صفحه‌بندی. */
     public function index(Request $request): View
     {
+        // پارامتر کوئری می‌تواند آرایه باشد (مثل ?type[]=1)؛ تبدیل مستقیم آرایه به رشته
+        // صفحه را با خطای ۵۰۰ می‌ترکاند. هر مقدار غیرمتنی را نادیده می‌گیریم تا پالایه
+        // فقط بی‌اثر شود.
         $filters = [
-            'type' => (string) $request->query('type', ''),
-            'source' => (string) $request->query('source', ''),
-            'aug' => (string) $request->query('aug', ''),
-            'split' => (string) $request->query('split', ''),
-            'verified' => (string) $request->query('verified', ''),
-            'tag' => (string) $request->query('tag', ''),
+            'type' => self::filterValue($request, 'type'),
+            'source' => self::filterValue($request, 'source'),
+            'aug' => self::filterValue($request, 'aug'),
+            'split' => self::filterValue($request, 'split'),
+            'verified' => self::filterValue($request, 'verified'),
+            'tag' => self::filterValue($request, 'tag'),
         ];
 
         $documentTypes = DocumentType::query()->orderBy('sort')->get();
@@ -120,7 +123,12 @@ class SampleController extends Controller
         }
 
         if ($filters['aug'] === 'none') {
-            $query->where(fn ($inner) => $inner->whereNull('augmentation')->orWhere('augmentation', ''));
+            // «بدون اعوجاج» در داده سه شکل دارد: NULL، رشتهٔ خالی و رشتهٔ 'none'.
+            // اگر هر سه را نگیریم، ردیف‌هایی می‌مانند که با هیچ پالایه‌ای دیده نمی‌شوند.
+            $query->where(fn ($inner) => $inner
+                ->whereNull('augmentation')
+                ->orWhere('augmentation', '')
+                ->orWhere('augmentation', 'none'));
         } elseif ($filters['aug'] !== '') {
             $query->where('augmentation', $filters['aug']);
         }
@@ -267,6 +275,7 @@ class SampleController extends Controller
         ], self::messages(), [
             'action' => 'عملیات',
             'ids' => 'نمونه‌های انتخاب‌شده',
+            'ids.*' => 'شناسهٔ نمونه',
             'tag_id' => 'تگ',
             'split' => 'بخش دیتاست',
         ]);
@@ -404,6 +413,17 @@ class SampleController extends Controller
             'uploaded' => DatasetSample::query()->where('source', 'uploaded')->count(),
             'verified' => DatasetSample::query()->where('is_verified', true)->count(),
         ];
+    }
+
+    /**
+     * مقدار یک پالایه از رشتهٔ کوئری.
+     * پارامتر آرایه‌ای یا هر مقدار غیرمتنی به رشتهٔ خالی (یعنی «بدون پالایه») تبدیل می‌شود.
+     */
+    private static function filterValue(Request $request, string $key): string
+    {
+        $value = $request->query($key, '');
+
+        return is_scalar($value) ? trim((string) $value) : '';
     }
 
     /** پیام‌های فارسی اعتبارسنجی. */

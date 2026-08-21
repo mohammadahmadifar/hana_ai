@@ -41,7 +41,8 @@
 
                     <div class="card">
                         <a href="{{ route('testimage.show', $item) }}" class="thumb" style="display:block;">
-                            <img src="{{ route('media', ['disk' => $item->disk, 'path' => $item->path]) }}"
+                            {{-- بندانگشتی ۲۰۰ پیکسلی؛ فرستادن PNG تمام‌اندازه در فهرست ۱۲تایی چند مگابایت است --}}
+                            <img src="{{ route('media', ['disk' => $item->disk, 'path' => $item->path, 'w' => 200]) }}"
                                  alt="تصویر تستی {{ $item->documentType?->label_fa }}"
                                  loading="lazy">
                         </a>

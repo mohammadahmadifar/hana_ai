@@ -19,9 +19,16 @@ class BuildDatasetExport implements ShouldQueue
 {
     use Queueable;
 
-    /** یک بار تلاش: خطا در فایل وضعیت ثبت می‌شود تا کاربر ببیند. */
+    /**
+     * یک بار تلاش: ساخت بسته سنگین است و تکرار خودکارش فقط دیسک را دوباره
+     * پر می‌کند؛ خطا در فایل وضعیت ثبت می‌شود تا کاربر خودش تصمیم بگیرد.
+     */
     public int $tries = 1;
 
+    /**
+     * عمداً کمتر از retry_after صف redis (۱۲۰۰ ثانیه) است تا کار در حال
+     * اجرا دوباره به صف برنگردد و دو کارگر هم‌زمان یک zip نسازند.
+     */
     public int $timeout = 900;
 
     public function __construct(public string $token)

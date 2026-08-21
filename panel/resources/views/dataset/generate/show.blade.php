@@ -29,15 +29,21 @@
         </p>
     </div>
 
-    @if ($batch->status === 'failed' && filled($batch->error))
-        <div class="alert alert--bad" role="alert">
-            <span class="alert__icon" aria-hidden="true">⛔</span>
-            <div class="alert__body">
-                <strong>تولید این دسته متوقف شد</strong>
-                <span id="batchError">{{ $batch->error }}</span>
-            </div>
+    @php
+        // یادداشت خطا فقط مال دستهٔ «ناموفق» نیست: دسته‌ای که تمام شده هم ممکن است
+        // بخشی از تصویرهایش ساخته نشده باشد و کاربر باید همین‌جا ببیندش.
+        $isStopped = $batch->status === 'failed';
+        $errorTitle = $isStopped ? 'تولید این دسته متوقف شد' : 'بخشی از تصویرهای این دسته ساخته نشد';
+    @endphp
+
+    <div class="alert alert--{{ $isStopped ? 'bad' : 'warn' }} {{ filled($batch->error) ? '' : 'hidden' }}"
+         role="alert" id="batchAlert">
+        <span class="alert__icon" aria-hidden="true" id="batchErrorIcon">{{ $isStopped ? '⛔' : '⚠️' }}</span>
+        <div class="alert__body">
+            <strong id="batchErrorTitle">{{ $errorTitle }}</strong>
+            <span id="batchError">{{ $batch->error }}</span>
         </div>
-    @endif
+    </div>
 
     <div class="card">
         <div class="card__head">
@@ -52,6 +58,7 @@
                         note="هر نمونه یک شخص مصنوعی" />
                 <x-stat id="statDone" :value="$batch->count_done" label="نمونهٔ انجام‌شده" tone="ok" />
                 <x-stat id="statFailed" :value="$batch->count_failed" label="نمونهٔ ناموفق"
+                        note="نمونه‌ای که همهٔ مدرک‌هایش ساخته نشد"
                         :tone="$batch->count_failed > 0 ? 'bad' : null" />
                 <x-stat id="statPercent" :value="$batch->progressPercent().'٪'" label="پیشرفت" tone="info" />
             </div>
@@ -153,7 +160,7 @@
                     <div class="grid grid--4">
                         @foreach ($preview as $sample)
                             <figure class="thumb" style="margin:0">
-                                <img src="{{ route('media', ['disk' => $sample->disk, 'path' => $sample->path]) }}"
+                                <img src="{{ route('media', ['disk' => $sample->disk, 'path' => $sample->path, 'w' => 200]) }}"
                                      alt="نمونهٔ {{ $sample->documentType?->label_fa ?? 'مدرک' }} شمارهٔ {{ $sample->id }}"
                                      loading="lazy">
                                 <figcaption class="tiny faint" style="padding:6px 8px">
@@ -198,6 +205,13 @@
         if (box) { box.textContent = faDigits(value); }
     };
 
+    // متن فارسیِ آماده (پیام خطا) نباید از فیلتر رقم رد شود؛ نقطهٔ جمله را خراب می‌کند.
+    var setRaw = function (id, value) {
+        var box = document.getElementById(id);
+        if (box) { box.textContent = value; }
+    };
+
+    var alertBox = document.getElementById('batchAlert');
     var badge = document.getElementById('statusBadge');
     var bar = document.getElementById('progressBar');
     var foot = document.getElementById('finishFoot');
@@ -222,6 +236,15 @@
                 fill.className = 'bar__fill' + (data.status_tone === 'info' ? '' : ' bar__fill--' + data.status_tone);
             }
             bar.setAttribute('aria-valuenow', data.percent);
+        }
+
+        // یادداشت خطا (مثلاً «۴ تصویر ساخته نشد») همان لحظه دیده شود، نه بعد از پایان کار.
+        if (alertBox && data.error) {
+            var stopped = data.status === 'failed';
+            alertBox.className = 'alert alert--' + (stopped ? 'bad' : 'warn');
+            setRaw('batchErrorIcon', stopped ? '⛔' : '⚠️');
+            setRaw('batchErrorTitle', stopped ? 'تولید این دسته متوقف شد' : 'بخشی از تصویرهای این دسته ساخته نشد');
+            setRaw('batchError', data.error);
         }
 
         if (data.finished) {
