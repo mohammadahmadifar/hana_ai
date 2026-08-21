@@ -101,6 +101,12 @@ class SampleController extends Controller
             $augmentationOptions[$value] = self::augmentationLabel($value);
         }
 
+        // پالایهٔ فعال باید در فهرست گزینه‌ها بماند، حتی اگر دیگر نمونه‌ای با آن مقدار نباشد؛
+        // وگرنه فرم بی‌صدا پالایه را می‌اندازد و کاربر نمی‌فهمد چه شد.
+        if ($filters['aug'] !== '' && ! isset($augmentationOptions[$filters['aug']])) {
+            $augmentationOptions[$filters['aug']] = self::augmentationLabel($filters['aug']);
+        }
+
         $query = DatasetSample::query()
             ->with(['documentType', 'tags'])
             ->withCount('annotations');
@@ -237,12 +243,16 @@ class SampleController extends Controller
     public function destroy(DatasetSample $sample): RedirectResponse
     {
         $id = $sample->id;
-        $this->forgetFiles($sample);
+        $left = $this->forgetFiles($sample);
         $sample->delete(); // برچسب‌ها و پیوت تگ با cascade پاک می‌شوند
 
-        return redirect()
+        $redirect = redirect()
             ->route('dataset.samples.index')
-            ->with('success', 'نمونه شمارهٔ '.Jalali::digits($id).' و فایل‌هایش حذف شد.');
+            ->with('success', 'نمونه شمارهٔ '.Jalali::digits($id).' حذف شد.');
+
+        return $left > 0
+            ? $redirect->with('warning', 'ردیف نمونه پاک شد ولی '.Jalali::digits($left).' فایل روی دیسک باقی ماند (دسترسی نوشتن را بررسی کنید).')
+            : $redirect;
     }
 
     /** کارهای دسته‌ای روی نمونه‌های انتخاب‌شده. */
@@ -334,29 +344,55 @@ class SampleController extends Controller
     /** حذف گروهی نمونه‌ها به همراه فایل‌هایشان. */
     private function bulkDelete($samples, string $count): RedirectResponse
     {
+        $left = 0;
+
         foreach ($samples as $sample) {
-            $this->forgetFiles($sample);
+            $left += $this->forgetFiles($sample);
         }
 
         DatasetSample::query()->whereIn('id', $samples->pluck('id'))->delete();
 
-        return back()->with('success', $count.' نمونه و فایل‌هایشان حذف شد.');
+        $redirect = back()->with('success', $count.' نمونه حذف شد.');
+
+        return $left > 0
+            ? $redirect->with('warning', 'ردیف‌ها پاک شدند ولی '.Jalali::digits($left).' فایل روی دیسک باقی ماند (دسترسی نوشتن را بررسی کنید).')
+            : $redirect;
     }
 
-    /** پاک کردن فایل‌های یک نمونه از دیسک خصوصی (نبودِ فایل خطا نیست). */
-    private function forgetFiles(DatasetSample $sample): void
+    /**
+     * پاک کردن فایل‌های یک نمونه از دیسک خصوصی.
+     * نبودِ فایل خطا نیست؛ خروجی شمار فایل‌هایی است که با وجود تلاش، حذف نشدند
+     * (معمولاً یعنی مالکیت/دسترسی نوشتن روی پوشه درست نیست).
+     */
+    private function forgetFiles(DatasetSample $sample): int
     {
+        $paths = array_filter(
+            [$sample->path, $sample->clean_path],
+            fn ($path) => filled($path) && ! str_contains((string) $path, '..'),
+        );
+
+        if ($paths === []) {
+            return 0;
+        }
+
         if (! is_array(config('filesystems.disks.'.$sample->disk))) {
-            return;
+            return count($paths); // دیسک ناشناخته: فایل‌ها دست‌نخورده می‌مانند
         }
 
         $disk = Storage::disk($sample->disk);
+        $left = 0;
 
-        foreach ([$sample->path, $sample->clean_path] as $path) {
-            if (filled($path) && ! str_contains((string) $path, '..') && $disk->exists($path)) {
-                $disk->delete($path);
+        foreach ($paths as $path) {
+            if (! $disk->exists($path)) {
+                continue;
+            }
+
+            if (! $disk->delete($path) || $disk->exists($path)) {
+                $left++;
             }
         }
+
+        return $left;
     }
 
     /** شمارنده‌های بالای صفحه (روی کل دیتاست، نه فقط نتیجهٔ پالایش). */
@@ -376,6 +412,8 @@ class SampleController extends Controller
         return [
             'required' => 'انتخاب :attribute الزامی است.',
             'required_if' => 'برای این عملیات، انتخاب :attribute الزامی است.',
+            'ids.required' => 'دست‌کم یک نمونه را انتخاب کنید.',
+            'ids.array' => 'فهرست نمونه‌های انتخاب‌شده معتبر نیست.',
             'array' => 'مقدار :attribute معتبر نیست.',
             'min' => 'دست‌کم یک نمونه را انتخاب کنید.',
             'integer' => 'مقدار :attribute معتبر نیست.',

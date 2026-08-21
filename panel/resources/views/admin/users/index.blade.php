@@ -88,7 +88,7 @@
                                         @if (! auth()->user()->is($row) && $row->is_active)
                                             <form method="POST" action="{{ route('admin.users.destroy', $row) }}"
                                                   style="display:inline"
-                                                  onsubmit="return confirm('حساب «{{ $row->name }}» غیرفعال شود؟');">
+                                                  data-confirm-user="{{ $row->name }}">
                                                 @csrf
                                                 @method('DELETE')
                                                 <button class="btn btn--sm btn--danger" type="submit">غیرفعال‌سازی</button>
@@ -110,3 +110,7 @@
         </div>
     </div>
 @endsection
+
+@push('scripts')
+    @include('admin.users._confirm-script')
+@endpush

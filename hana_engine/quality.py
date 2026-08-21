@@ -10,7 +10,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from . import EngineError, ensure_allowed_file
+from . import EngineError, assert_readable
 
 # آستانهٔ راهنمای تاری
 BLUR_THRESHOLD = 100.0
@@ -21,7 +21,7 @@ BRIGHT_THRESHOLD = 200.0
 
 
 def image_quality(path):
-    target = ensure_allowed_file(path)
+    target = assert_readable(path)
 
     image = cv2.imread(str(target))
 

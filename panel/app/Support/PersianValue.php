@@ -65,6 +65,17 @@ final class PersianValue
     }
 
     /**
+     * عدد اعشاری با ارقام فارسی و جداکنندهٔ اعشار فارسی (٫)، مثل ۰٫۷۵.
+     * برای نمایش شدت اعوجاج‌ها لازم است؛ نقطهٔ لاتین وسط عدد فارسی زشت است.
+     */
+    public static function decimal(float $value, int $decimals = 0): string
+    {
+        $text = number_format($value, max(0, $decimals), '.', '');
+
+        return strtr(self::toPersianDigits($text), ['.' => '٫']);
+    }
+
+    /**
      * یکسان‌سازی پایه: حذف کاراکترهای نامرئی، عربی → فارسی، فشرده‌کردن فاصله‌ها.
      */
     public static function normalize(?string $value): string

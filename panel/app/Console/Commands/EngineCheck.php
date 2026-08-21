@@ -4,7 +4,9 @@ namespace App\Console\Commands;
 
 use App\Exceptions\EngineException;
 use App\Services\HanaEngine;
+use Closure;
 use Illuminate\Console\Command;
+use Illuminate\Console\View\TaskResult;
 
 /**
  * تست سلامت پل پنل ↔ موتور پایتون.
@@ -40,10 +42,10 @@ class EngineCheck extends Command
             // ---------------------------------------------------------
             // ۱) نسخه
             // ---------------------------------------------------------
-            $this->components->task('۱) خواندن نسخهٔ موتور', function () use ($engine, &$version) {
+            $this->step('۱) خواندن نسخهٔ موتور', 'موتور نسخهٔ خود را برنگرداند.', function () use ($engine, &$version) {
                 $version = $engine->version();
 
-                return true;
+                return ($version['engine_version'] ?? '') !== '';
             });
 
             $this->components->twoColumnDetail('نسخهٔ پل', $version['engine_version'] ?? '؟');
@@ -71,7 +73,7 @@ class EngineCheck extends Command
             // ---------------------------------------------------------
             // ۲) دادهٔ مصنوعی
             // ---------------------------------------------------------
-            $this->components->task('۲) تولید شخص مصنوعی', function () use ($engine, &$person) {
+            $this->step('۲) تولید شخص مصنوعی', 'موتور هیچ شخص مصنوعی برنگرداند.', function () use ($engine, &$person) {
                 $person = $engine->generatePerson()['person'] ?? [];
 
                 return $person !== [];
@@ -86,7 +88,7 @@ class EngineCheck extends Command
             // ---------------------------------------------------------
             // ۳) نقشهٔ فیلدها
             // ---------------------------------------------------------
-            $this->components->task('۳) خواندن نقشهٔ فیلدها', function () use ($engine, &$layouts) {
+            $this->step('۳) خواندن نقشهٔ فیلدها', 'موتور نقشهٔ فیلدها را برنگرداند.', function () use ($engine, &$layouts) {
                 $layouts = $engine->documentLayouts()['layouts'] ?? [];
 
                 return $layouts !== [];
@@ -114,7 +116,7 @@ class EngineCheck extends Command
             // ---------------------------------------------------------
             $basename = 'engine_check_'.$type;
 
-            $this->components->task('۴) ساخت تصویر «'.$layouts[$type]['label_fa'].'»', function () use ($engine, $type, $person, $outDir, $basename, &$render) {
+            $this->step('۴) ساخت تصویر «'.$layouts[$type]['label_fa'].'»', 'تصویر ساخته‌شده روی دیسک پیدا نشد؛ مسیر خروجی قابل نوشتن نیست.', function () use ($engine, $type, $person, $outDir, $basename, &$render) {
                 $render = $engine->renderDocument(
                     documentType: $type,
                     payload: $person,
@@ -127,7 +129,8 @@ class EngineCheck extends Command
                     basename: $basename,
                 );
 
-                return is_file($render['clean_path'] ?? '');
+                return is_file($render['clean_path'] ?? '')
+                    && (blank($render['augmented_path'] ?? null) || is_file((string) $render['augmented_path']));
             });
 
             $this->artifacts[] = $render['clean_path'] ?? null;
@@ -139,14 +142,14 @@ class EngineCheck extends Command
                 'ابعاد / زمان',
                 $render['width'].'×'.$render['height'].' — '.$render['duration_ms'].' میلی‌ثانیه',
             );
-            $this->components->twoColumnDetail('کادرهای برگشتی', (string) count($render['fields']));
+            $this->components->twoColumnDetail('کادرهای برگشتی', (string) count($render['fields'] ?? []));
 
             if (! empty($render['missing_fields'])) {
                 $this->components->warn('فیلدهای بدون مقدار: '.implode('، ', $render['missing_fields']));
             }
 
-            foreach ($render['fields'] as $key => $field) {
-                $norm = $field['norm'];
+            foreach (($render['fields'] ?? []) as $key => $field) {
+                $norm = $field['norm'] ?? ['x' => 0, 'y' => 0, 'w' => 0, 'h' => 0];
 
                 $this->components->twoColumnDetail(
                     '  '.$key,
@@ -159,23 +162,26 @@ class EngineCheck extends Command
             // ---------------------------------------------------------
             // ۵) کیفیت تصویر
             // ---------------------------------------------------------
-            $this->components->task('۵) سنجش کیفیت تصویر', function () use ($engine, $render, &$quality) {
+            $this->step('۵) سنجش کیفیت تصویر', 'موتور مقدار «تاری» تصویر را برنگرداند.', function () use ($engine, $render, &$quality) {
                 $quality = $engine->imageQuality($render['clean_path']);
 
                 return isset($quality['blur_score']);
             });
 
+            $blur = $quality['blur_score'] ?? null;
+            $brightness = $quality['brightness'] ?? null;
+
             $this->components->twoColumnDetail(
                 'تاری / روشنایی',
-                $quality['blur_score'].' / '.$quality['brightness']
-                    .($quality['is_blurry_hint'] ? '  (تار)' : '  (واضح)'),
+                ($blur ?? 'نامشخص').' / '.($brightness ?? 'نامشخص')
+                    .($blur === null ? '' : (($quality['is_blurry_hint'] ?? false) ? '  (تار)' : '  (واضح)')),
             );
             $this->newLine();
 
             // ---------------------------------------------------------
             // ۶) OCR واقعی
             // ---------------------------------------------------------
-            $this->components->task('۶) اجرای OCR روی تصویر ساخته‌شده', function () use ($engine, $render, $type, $outDir, &$ocr) {
+            $this->step('۶) اجرای OCR روی تصویر ساخته‌شده', 'OCR هیچ متنی از تصویر استخراج نکرد.', function () use ($engine, $render, $type, $outDir, &$ocr) {
                 $ocr = $engine->ocrDocument(
                     path: $render['clean_path'],
                     documentType: $type,
@@ -220,6 +226,28 @@ class EngineCheck extends Command
         } finally {
             $this->cleanup($outDir);
         }
+    }
+
+    /**
+     * اجرای یک مرحله با گزارش درست شکست.
+     *
+     * لاراول مقدار برگشتی بستهٔ components->task() را با TaskResult مقایسه
+     * می‌کند؛ بنابراین «return false» همیشه DONE چاپ می‌شد. شکست را با
+     * استثنا اعلام می‌کنیم تا هم FAIL چاپ شود و هم دستور با کد خطا تمام شود.
+     */
+    private function step(string $title, string $failure, Closure $callback): void
+    {
+        $this->components->task($title, function () use ($callback, $failure, $title) {
+            if ($callback() === false) {
+                throw new EngineException(
+                    $failure,
+                    'step failed: '.$title,
+                    'hana:engine-check',
+                );
+            }
+
+            return TaskResult::Success->value;
+        });
     }
 
     private function cleanup(string $outDir): void

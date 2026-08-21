@@ -479,10 +479,18 @@ class DatasetExporter
             $fieldLabels = $this->fieldLabelMap();
 
             $samplesStream = null;
+            $handle = null;
+
             if ($options['format'] === 'json') {
                 $samplesStream = tempnam(sys_get_temp_dir(), 'hana-samples-');
+                if ($samplesStream === false) {
+                    throw new RuntimeException('ساخت فایل موقت برای خروجی JSON ممکن نشد.');
+                }
                 $temporaryFiles[] = $samplesStream;
                 $handle = fopen($samplesStream, 'wb');
+                if ($handle === false) {
+                    throw new RuntimeException('باز کردن فایل موقت خروجی JSON ممکن نشد.');
+                }
             }
 
             $isFirstSample = true;
@@ -526,6 +534,9 @@ class DatasetExporter
                 fclose($handle);
 
                 $bundle = tempnam(sys_get_temp_dir(), 'hana-dataset-');
+                if ($bundle === false) {
+                    throw new RuntimeException('ساخت فایل موقت dataset.json ممکن نشد.');
+                }
                 $temporaryFiles[] = $bundle;
                 $bundleHandle = fopen($bundle, 'wb');
 

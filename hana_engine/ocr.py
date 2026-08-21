@@ -14,14 +14,14 @@ import contextlib
 import sys
 import time
 
-from . import ENGINE_ROOT, EngineError, ensure_allowed_dir, ensure_allowed_file, safe_basename
-
-DEFAULT_PREPROCESSED_DIR = ENGINE_ROOT / "dataset" / "preprocessed" / "_engine"
+from . import EngineError, assert_readable, assert_writable_dir, default_out_dir, safe_basename
 
 
-def _run_preprocess(source, target_dir, basename):
-    from app.preprocessing.image_preprocessing import preprocess_image
-
+def _assert_readable_image(source):
+    """
+    بررسی «تصویر قابل خواندن است؟» — پیش از هر مسیری اجرا می‌شود تا در حالت
+    preprocess=false هم پیام فارسی بدهد، نه خطای انگلیسی Tesseract/PIL.
+    """
     import cv2
 
     if cv2.imread(str(source)) is None:
@@ -29,6 +29,10 @@ def _run_preprocess(source, target_dir, basename):
             "فایل تصویر قابل خواندن نیست یا فرمت آن پشتیبانی نمی‌شود.",
             f"path={source}",
         )
+
+
+def _run_preprocess(source, target_dir, basename):
+    from app.preprocessing.image_preprocessing import preprocess_image
 
     output = target_dir / f"{basename}.png"
 
@@ -46,13 +50,15 @@ def _run_preprocess(source, target_dir, basename):
 def ocr_document(path, document_type=None, preprocess=True, out_dir=None):
     started = time.perf_counter()
 
-    source = ensure_allowed_file(path)
+    source = assert_readable(path)
+
+    _assert_readable_image(source)
 
     preprocessed_path = None
     target = source
 
     if preprocess:
-        target_dir = ensure_allowed_dir(out_dir or DEFAULT_PREPROCESSED_DIR)
+        target_dir = assert_writable_dir(out_dir or default_out_dir("ocr_document"))
 
         basename = safe_basename(
             f"{source.stem}_pre",

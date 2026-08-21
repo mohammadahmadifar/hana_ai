@@ -1,10 +1,15 @@
 {{--
     منوی کناری — کاملاً داده‌محور از روی config/panel_menu.php ساخته می‌شود.
-    قاعده مهم: روت‌هایی که هنوز ثبت نشده‌اند با Route::has فیلتر می‌شوند و
-    به‌جای لینک، یک آیتم غیرفعال با برچسب «به‌زودی» نشان داده می‌شود؛
-    پس این فایل هرگز خطای «Route [...] not defined» نمی‌دهد.
+
+    قاعده مهم: ساخت نشانی هر آیتم از App\Support\PanelMenu رد می‌شود. اگر روت
+    ثبت نشده باشد — یا ثبت شده ولی پارامتر اجباری داشته باشد و نشانی‌اش ساختنی
+    نباشد — به‌جای لینک، یک آیتم غیرفعال با برچسب «به‌زودی» نشان داده می‌شود.
+    پس این فایل نه خطای «Route [...] not defined» می‌دهد و نه UrlGenerationException؛
+    یعنی یک روت ناقصِ ناحیهٔ دیگر نمی‌تواند همه صفحه‌های پنل را ۵۰۰ کند.
 --}}
 @php
+    use App\Support\PanelMenu;
+
     $menuRole = auth()->user()->role ?? null;
 
     /** فیلتر نقش: آرایه خالی یعنی «برای همه». */
@@ -12,7 +17,7 @@
 
     /**
      * شمارنده‌های badge. فقط وقتی محاسبه می‌شوند که آیتمِ صاحبِ شمارنده
-     * هم برای این نقش قابل دیدن باشد و هم روتش واقعاً ثبت شده باشد.
+     * هم برای این نقش قابل دیدن باشد و هم لینکش واقعاً ساختنی باشد.
      */
     $menuCounter = static fn (string $key): int => match ($key) {
         'cases_needs_review' => \App\Models\PermitCase::where('status', 'needs_review')->count(),
@@ -33,15 +38,15 @@
 
     @foreach ($groupItems as $item)
         @php
-            $routeName = $item['route'];
-            $exists = \Illuminate\Support\Facades\Route::has($routeName);
-            $patterns = (array) ($item['active'] ?? $routeName);
-            $isActive = $exists && request()->routeIs(...$patterns);
-            $count = ($exists && ! empty($item['counter'])) ? $menuCounter($item['counter']) : 0;
+            $routeName = $item['route'] ?? null;
+            $itemUrl = PanelMenu::url($routeName, (array) ($item['params'] ?? []));
+            $patterns = (array) ($item['active'] ?? $routeName ?? []);
+            $isActive = $itemUrl !== null && $patterns !== [] && request()->routeIs(...$patterns);
+            $count = ($itemUrl !== null && ! empty($item['counter'])) ? $menuCounter($item['counter']) : 0;
         @endphp
 
-        @if ($exists)
-            <a href="{{ route($routeName) }}"
+        @if ($itemUrl !== null)
+            <a href="{{ $itemUrl }}"
                class="navlink{{ $isActive ? ' is-active' : '' }}"
                @if ($isActive) aria-current="page" @endif>
                 <span class="navlink__icon" aria-hidden="true">{{ $item['icon'] ?? '•' }}</span>

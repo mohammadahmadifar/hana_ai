@@ -62,7 +62,7 @@
                     حساب حذف نمی‌شود تا سابقهٔ پرونده‌ها و بررسی‌ها دست‌نخورده بماند؛ فقط امکان ورود از کاربر گرفته می‌شود.
                 </p>
                 <form method="POST" action="{{ route('admin.users.destroy', $user) }}"
-                      onsubmit="return confirm('حساب «{{ $user->name }}» غیرفعال شود؟');">
+                      data-confirm-user="{{ $user->name }}">
                     @csrf
                     @method('DELETE')
                     <button class="btn btn--danger" type="submit">غیرفعال‌سازی این کاربر</button>
@@ -71,3 +71,7 @@
         </div>
     @endif
 @endsection
+
+@push('scripts')
+    @include('admin.users._confirm-script')
+@endpush

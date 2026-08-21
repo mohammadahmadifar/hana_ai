@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -23,8 +24,10 @@ class UserController extends Controller
     /** فهرست کاربران، با جست‌وجوی ساده و پالایش بر اساس نقش. */
     public function index(Request $request): View
     {
-        $q = trim((string) $request->query('q', ''));
-        $role = (string) $request->query('role', '');
+        // ورودی‌های کوئری ممکن است آرایه باشند (مثل ?q[]=a)؛ در آن حالت نادیده گرفته می‌شوند
+        // تا به جای صفحهٔ خطای ۵۰۰، فهرست بدون پالایش نمایش داده شود.
+        $q = trim(self::queryText($request, 'q'));
+        $role = self::queryText($request, 'role');
 
         $users = User::query()
             ->when($q !== '', function ($builder) use ($q) {
@@ -47,7 +50,9 @@ class UserController extends Controller
             'role' => $role,
             'roles' => User::ROLES,
             'activeCount' => $users->where('is_active', true)->count(),
-            'adminCount' => $users->where('role', 'admin')->where('is_active', true)->count(),
+            // شمار مدیران فعال یک واقعیت سراسری است، نه نتیجهٔ پالایش جاری؛
+            // برای همین با کوئری جدا روی کل جدول شمرده می‌شود.
+            'adminCount' => User::query()->where('role', 'admin')->where('is_active', true)->count(),
         ]);
     }
 
@@ -118,14 +123,31 @@ class UserController extends Controller
         if (! $isSelf) {
             $user->role = $data['role'];
             $user->is_active = $request->boolean('is_active');
+
+            // غیرفعال‌سازی باید فوری باشد: تا وقتی remember_token سر جایش بماند،
+            // کوکی «مرا به خاطر بسپار» همچنان یک اعتبارنامهٔ معتبر است و اگر بعداً
+            // حساب دوباره فعال شود همان کوکی قدیمی زنده می‌شود.
+            if (! $user->is_active) {
+                $user->setRememberToken(null);
+            }
         }
 
         if (! empty($data['password'])) {
             $user->password = Hash::make($data['password']);
+
+            // تغییر رمز همهٔ اعتبارنامه‌های قبلی را باطل می‌کند:
+            // هم کوکی «مرا به خاطر بسپار» و هم نشست‌های باز روی دستگاه‌های دیگر
+            // (اثر انگشت رمز در نشست را EnsureRole بررسی می‌کند).
             $user->setRememberToken(null);
         }
 
         $user->save();
+
+        // نشست خود مدیری که همین الان رمزش را عوض کرد نباید قربانی همان بررسی شود؛
+        // اثر انگشت را پاک می‌کنیم تا در درخواست بعدی با رمز تازه ساخته شود.
+        if ($isSelf && ! empty($data['password'])) {
+            $request->session()->forget(self::passwordFingerprintKey());
+        }
 
         $note = $isSelf
             ? 'حساب خودتان به‌روزرسانی شد. (نقش و وضعیت حساب خودتان قابل تغییر نیست.)'
@@ -156,6 +178,25 @@ class UserController extends Controller
         return redirect()
             ->route('admin.users.index')
             ->with('success', 'کاربر «'.$user->name.'» غیرفعال شد و دیگر نمی‌تواند وارد شود.');
+    }
+
+    /**
+     * خواندن یک ورودی کوئری به‌صورت متن.
+     *
+     * مهاجم می‌تواند هر پارامتری را آرایه بفرستد (?q[]=a). بدون این گارد،
+     * تبدیل آرایه به رشته خطای ۵۰۰ می‌دهد؛ اینجا مقدار غیرمتنی نادیده گرفته می‌شود.
+     */
+    private static function queryText(Request $request, string $key): string
+    {
+        $value = $request->query($key, '');
+
+        return is_scalar($value) ? (string) $value : '';
+    }
+
+    /** کلید نشستِ «اثر انگشت رمز» — همان کلیدی که میان‌افزار EnsureRole می‌خواند. */
+    private static function passwordFingerprintKey(): string
+    {
+        return 'password_hash_'.Auth::getDefaultDriver();
     }
 
     /** پیام‌های فارسی اعتبارسنجی. */

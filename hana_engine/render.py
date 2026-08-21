@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from . import ENGINE_ROOT, EngineError, ensure_allowed_dir, safe_basename
+from . import ENGINE_ROOT, EngineError, assert_writable_dir, default_out_dir, safe_basename
 from .layouts import field_font_size, font_path, get_layout, resolve_value, template_path
 
 AUG_ORDER = ("rotation", "brightness", "blur", "noise", "shadow")
@@ -180,6 +180,54 @@ def _norm_box(box, width, height):
 
 
 # ---------------------------------------------------------------
+# ذخیرهٔ فایل با بررسی نتیجه
+# ---------------------------------------------------------------
+
+def _verify_written(path, what):
+    """اطمینان از اینکه فایل واقعاً روی دیسک نوشته شده و خالی نیست."""
+    if not path.is_file() or path.stat().st_size == 0:
+        raise EngineError(
+            f"ذخیرهٔ {what} در «{path}» ممکن نشد؛ مسیر خروجی قابل نوشتن نیست "
+            "یا فضای دیسک کافی نیست.",
+            f"path={path} exists={path.is_file()}",
+        )
+
+
+def _save_pil(image, path):
+    """ذخیرهٔ تصویر تمیز با PIL؛ در شکست، خطای فارسی."""
+    try:
+        image.save(str(path))
+    except (OSError, ValueError) as exc:
+        raise EngineError(
+            f"ذخیرهٔ تصویر مدرک در «{path}» ممکن نشد؛ مسیر خروجی قابل نوشتن نیست "
+            "یا فضای دیسک کافی نیست.",
+            f"{type(exc).__name__}: {exc}",
+        ) from exc
+
+    _verify_written(path, "تصویر مدرک")
+
+
+def _save_cv(frame, path):
+    """ذخیرهٔ تصویر اعوجاج‌یافته با cv2؛ imwrite فقط False برمی‌گرداند و استثنا نمی‌دهد."""
+    try:
+        written = bool(cv2.imwrite(str(path), frame))
+    except cv2.error as exc:
+        raise EngineError(
+            f"ذخیرهٔ تصویر با اعوجاج در «{path}» ممکن نشد.",
+            f"cv2.error: {exc}",
+        ) from exc
+
+    if not written:
+        raise EngineError(
+            f"ذخیرهٔ تصویر با اعوجاج در «{path}» ممکن نشد؛ مسیر خروجی قابل نوشتن نیست "
+            "یا فضای دیسک کافی نیست.",
+            f"cv2.imwrite returned False, path={path}",
+        )
+
+    _verify_written(path, "تصویر با اعوجاج")
+
+
+# ---------------------------------------------------------------
 # رسم فیلدها
 # ---------------------------------------------------------------
 
@@ -281,9 +329,7 @@ def render_document(
 
     payload = payload or {}
 
-    target_dir = ensure_allowed_dir(
-        out_dir or (ENGINE_ROOT / "dataset" / "generated" / "_engine")
-    )
+    target_dir = assert_writable_dir(out_dir or default_out_dir("render_document"))
 
     name = safe_basename(basename, f"{document_type}_{int(time.time() * 1000)}")
 
@@ -293,7 +339,7 @@ def render_document(
     boxes, missing = _draw_fields(image, layout, payload)
 
     clean_path = target_dir / f"{name}.png"
-    image.save(clean_path)
+    _save_pil(image, clean_path)
 
     width, height = image.size
 
@@ -347,7 +393,7 @@ def render_document(
                 applied.append({"name": "shadow", **shadow_params})
 
         augmented_path = target_dir / f"{name}_aug.png"
-        cv2.imwrite(str(augmented_path), frame)
+        _save_cv(frame, augmented_path)
 
         # کادرها روی تصویر اعوجاج‌یافته (فقط چرخش هندسه را عوض می‌کند)
         boxes_aug = {}

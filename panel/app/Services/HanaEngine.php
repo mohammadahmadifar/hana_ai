@@ -193,7 +193,7 @@ class HanaEngine
     ): array {
         return $this->call('render_document', [
             'document_type' => $documentType,
-            'payload' => $payload,
+            'payload' => (object) $payload,
             'augmentations' => (object) $augmentations,
             'out_dir' => $outDir,
             'basename' => $basename,
