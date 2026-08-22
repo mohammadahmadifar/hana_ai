@@ -19,6 +19,7 @@
     .venv/bin/python scripts/benchmark.py --last 25     # بدون تولید؛ ۲۵ نمونهٔ آخر
     .venv/bin/python scripts/benchmark.py --from 26 --to 50
     .venv/bin/python scripts/benchmark.py --last 25 --variants   # مسیر پنل: OCR چندمقیاسی
+    .venv/bin/python scripts/benchmark.py --last 25 --plate      # فقط پلاک خودرو، با شبیه‌سازی تلگرام
 
 دو مسیر، دو عدد
 ---------------
@@ -247,6 +248,181 @@ def variant_text(document_type, number):
     return "\n".join(pieces)
 
 
+# -------------------------------------
+# پلاک خودرو
+
+
+# پیام‌رسان‌ها عکس را کوچک و دوباره فشرده می‌کنند؛ این دو عدد از فایل‌های
+# واقعیِ پروندهٔ ۲۷۲ درآمده‌اند (۸۱۷ از ۱۶۰۶ ≈ ۰.۵۱).
+TELEGRAM_RATIO = 0.51
+TELEGRAM_QUALITY = 70
+
+
+def _shrink_like_messenger(image):
+    import cv2
+
+    height, width = image.shape[:2]
+
+    small = cv2.resize(
+        image,
+        (int(width * TELEGRAM_RATIO), int(height * TELEGRAM_RATIO)),
+        interpolation=cv2.INTER_AREA,
+    )
+
+    ok, buffer = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), TELEGRAM_QUALITY])
+
+    return cv2.imdecode(buffer, cv2.IMREAD_COLOR) if ok else small
+
+
+def _read_plate(image, scratch):
+    """پلاک یک تصویر کارت خودرو — با همان پیش‌پردازش پایپ‌لاین."""
+    import contextlib
+    import io
+
+    import cv2
+
+    from app.ocr.vehicle_card_ocr import vehicle_card_ocr
+    from app.preprocessing.image_preprocessing import apply_steps
+
+    cv2.imwrite(str(scratch), apply_steps(image))
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        try:
+            _vin, plate = vehicle_card_ocr(str(scratch))
+        except Exception as exc:
+            return f"ERR {type(exc).__name__}"
+
+    return (plate or "").strip()
+
+
+def _plate_key(value):
+    return (value or "").replace(" ", "").replace("\u200c", "")
+
+
+def evaluate_plates(first, last):
+    """
+    دقت خواندن پلاک روی بازهٔ نمونه‌ها، در سه حالت.
+
+    چرا جدا از بقیه: پلاک از مسیر ویژهٔ خودش می‌آید (برش کادر پلاک و
+    تکه‌بندی نویسه‌ها)، نه از متن صفحه، پس معیار زیررشته‌ای چیزی دربارهٔ‌اش
+    نمی‌گوید. و چون همان مسیر به «کوچک‌شدن عکس» حساس است، حالت شبیه‌سازی
+    پیام‌رسان هم سنجیده می‌شود.
+    """
+    import cv2
+
+    from hana_engine import ENGINE_ROOT
+    from hana_engine.layouts import template_size
+
+    reference = (template_size("vehicle_card") or (1606, 0))[0]
+
+    scratch_dir = ENGINE_ROOT / "dataset" / "benchmark"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    scratch = scratch_dir / "_plate_probe.png"
+
+    modes = ["اصلی", "کوچک‌شده", "کوچک‌شده ×۱٫۲۵"]
+    hits = dict.fromkeys(modes, 0)
+    total = 0
+    misses = []
+    skipped = []
+
+    for number in sample_numbers("vehicle_card"):
+
+        if not (first <= number <= last):
+            continue
+
+        label_file = DATASET / "labels" / "vehicle_card" / f"{number:03d}.json"
+        sources = sorted((DATASET / "processed" / "vehicle_card").glob(f"{number:03d}_*.png"))
+
+        if not label_file.is_file() or not sources:
+            skipped.append(f"{number:03d} (تصویر یا لیبل نیست)")
+
+            continue
+
+        truth = json.loads(label_file.read_text(encoding="utf-8")).get("plate_number")
+
+        if not truth:
+            skipped.append(f"{number:03d} (لیبل پلاک ندارد)")
+
+            continue
+
+        # هر نمونه یک نسخهٔ اعوجاج‌دار دارد و نوعش بین نمونه‌ها فرق می‌کند
+        # (نویز، چرخش، سایه، …)؛ نامش در گزارش می‌آید تا معلوم باشد این عدد
+        # روی چه چیزی گرفته شده.
+        source = sources[0]
+
+        image = cv2.imread(str(source))
+
+        if image is None:
+            skipped.append(f"{source.stem} (خوانده نشد)")
+
+            continue
+
+        total += 1
+
+        shrunk = _shrink_like_messenger(image)
+
+        height, width = shrunk.shape[:2]
+        factor = int(reference * 1.25) / float(width)
+
+        enlarged = cv2.resize(
+            shrunk,
+            (int(width * factor), int(height * factor)),
+            interpolation=cv2.INTER_CUBIC,
+        )
+
+        for mode, candidate in zip(modes, (image, shrunk, enlarged)):
+
+            read = _read_plate(candidate, scratch)
+
+            if _plate_key(read) == _plate_key(truth):
+                hits[mode] += 1
+            else:
+                misses.append(f"{source.stem} [{mode}]: «{truth}» ← «{read}»")
+
+    scratch.unlink(missing_ok=True)
+
+    return {
+        "total": total,
+        "hits": hits,
+        "modes": modes,
+        "misses": misses,
+        "skipped": skipped,
+    }
+
+
+def print_plate_report(summary, first, last):
+
+    print()
+    print("=" * 72)
+    print(f"پلاک کارت خودرو — نمونه‌های {first:03d} تا {last:03d}")
+    print("=" * 72)
+
+    if summary["total"] == 0:
+        print("هیچ نمونه‌ای با لیبل پلاک پیدا نشد.")
+
+        return
+
+    for mode in summary["modes"]:
+        hit = summary["hits"][mode]
+        print(f"{mode:<22}{hit:>3} از {summary['total']:<4}{percent(hit, summary['total']):>8.1f}٪")
+
+    print("=" * 72)
+
+    if summary["misses"]:
+        print("ناموفق:")
+
+        for line in summary["misses"]:
+            print("   ", line)
+
+    if summary["skipped"]:
+        print("سنجیده نشد:")
+
+        for line in summary["skipped"]:
+            print("   ", line)
+
+    print()
+
+
 def percent(part, whole):
     return 100.0 * part / whole if whole else 0.0
 
@@ -354,6 +530,12 @@ def parse_args():
         help="متن را از مسیر چندمقیاسی موتور بگیر (همان راهی که پنل می‌رود)",
     )
 
+    parser.add_argument(
+        "--plate",
+        action="store_true",
+        help="به‌جای متن، فقط دقت پلاک کارت خودرو را بسنج (با شبیه‌سازی پیام‌رسان)",
+    )
+
     return parser.parse_args()
 
 
@@ -394,6 +576,11 @@ def main():
 
     if last < first:
         raise SystemExit("بازهٔ نمونه‌ها خالی است؛ اول با --number چند نمونه بسازید.")
+
+    if args.plate:
+        print_plate_report(evaluate_plates(first, last), first, last)
+
+        return
 
     process_pending()
 

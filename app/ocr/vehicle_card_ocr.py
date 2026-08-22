@@ -95,6 +95,18 @@ PLATE_HEIGHT = 193
 PLATE_ASPECT_MIN = 3.0
 PLATE_ASPECT_MAX = 4.8
 
+# سهم سفیدِ یک سطر/ستونِ لبه‌ای که «خط لبهٔ عکس» حساب می‌شود — clear_edge_lines()
+EDGE_LINE_RATIO = 0.85
+
+# بیشترین سطر/ستونی که از هر طرف برداشته می‌شود، به‌صورت کسری از ارتفاع
+# ناحیه (با کف چهار پیکسل). خط لبهٔ عکس نازک است ولی **با بزرگ‌نمایی کلفت
+# می‌شود**: روی کارت پروندهٔ ۲۹۴ سقف ثابتِ چهار در مقیاس ۱٫۰ کافی بود و در
+# ۱٫۲۵ و ۱٫۵ نبود، پس مکان‌یابی همان‌جا دوباره می‌شکست. سقف هست تا حالت
+# مرزی «ماسک تقریباً یکدست» یک‌چهارم هر طرف را نخورد.
+EDGE_LINE_MAX_RATIO = 0.02
+EDGE_LINE_MIN_MAX = 4
+
+
 # نوار متن = فقط داخل کادر سفید اصلی پلاک (همان جایی که image_writer
 # رشتهٔ پلاک را چاپ می‌کند). کادر کوچک «ایران» و خط جداکنندهٔ تمام‌قدش
 # عمداً بیرون می‌مانند، چون آن خط سگمنتیشن رقم‌ها را خراب می‌کرد.
@@ -103,6 +115,46 @@ BAND_TOP = 15
 BAND_BOTTOM = 178
 BAND_LEFT = 92
 BAND_RIGHT = 532
+
+# کادر کوچک سمت راست: «ایران» بالا و کد استان پایین. روی قالب فعلی خالی
+# می‌ماند (ژنراتور کل رشته را داخل کادر اصلی چاپ می‌کند)، ولی روی چیدمان
+# واقعی پلاک ایرانی — و روی کارت‌های ساخته‌شده با ژنراتورِ پیش از تسک ۶۳۷ —
+# کد استان همان‌جاست. مختصات نسبت به کادر صاف‌شدهٔ ۷۲۷×۱۹۳ است.
+PROVINCE_TOP = 60
+PROVINCE_BOTTOM = 176
+PROVINCE_LEFT = 545
+PROVINCE_RIGHT = 715
+
+# شمار توکنِ کادر اصلی وقتی کد استان داخل کادر «ایران» نشسته.
+# ترتیب دیداری روی این چیدمان «۹۷ س ۹۰۰» است — یعنی دو رقم، حرف، سه رقم.
+SPLIT_TOKEN_COUNT = 3
+
+# طول توکن‌های رقمی در همان حالت، به ترتیب دیداری
+SPLIT_DIGIT_LENGTHS = {0: 2, 2: 3}
+
+# جای حرف در همان حالت
+SPLIT_LETTER_INDEX = 1
+
+# شمار رقم کد استان
+PROVINCE_DIGITS = 2
+
+# کمترین نمرهٔ تطبیق الگو برای اینکه یک لکه «رقمِ کد استان» شمرده شود.
+#
+# match_digit همیشه نزدیک‌ترین رقم را برمی‌گرداند، هرچقدر هم بد؛ بدون این کف،
+# دو لکهٔ نویز داخل کادرِ خالیِ «ایران» یک کد استانِ خوش‌ظاهر می‌سازند.
+# اندازه‌گیری روی ۲۵ نمونه: رقم واقعی ۰.۹۲ و ۰.۹۴ گرفت، و چهار تشخیصِ کاذب
+# (روی نمونهٔ نویزی و کوچک‌شده) همه زیر ۰.۴۴ ماندند.
+PROVINCE_MIN_SCORE = 0.70
+
+# بیشترین تکهٔ کادر اصلی برای اینکه چیدمان «دوکادره» شمرده شود.
+#
+# قالب فعلی واژهٔ «ایران» را هم داخل کادر اصلی چاپ می‌کند، پس آن‌جا همیشه
+# حدود دوازده تکه هست (اندازه‌گیری روی ۲۵ نمونه: ۱۲ تا ۱۳). چیدمان دوکادره
+# فقط دو رقم و یک حرف و سه رقم دارد، یعنی شش تکه. این شمارش تنها داورِ
+# مطمئنِ چیدمان است: خواندنِ رقم از کادر «ایران» به‌تنهایی کافی نیست، چون
+# روی نمونهٔ نویزی یک بار دو لکهٔ نویز «۴۰» خوانده شدند و پلاک درست را
+# خراب کردند.
+MAX_SPLIT_BOXES = 9
 
 
 # ---------------------------------------------------
@@ -165,6 +217,53 @@ def normalize_illumination(gray, kernel_size):
 
 # ---------------------------------------------------
 
+def clear_edge_lines(mask, ratio=EDGE_LINE_RATIO):
+    """
+    خط تیرهٔ لبهٔ عکس را از ماسک برمی‌دارد.
+
+    چرا لازم است: کارت‌هایی که با دوربین یا پیام‌رسان بریده شده‌اند یک خط
+    تیرهٔ تمام‌عرض در لبه دارند. آن خط در ماسکِ معکوس سفید می‌شود و بعد از
+    closing، **همهٔ** لکه‌های نوار پایین کارت را به هم می‌دوزد؛ آن‌وقت
+    بزرگ‌ترین کانتور یک مستطیل به عرض کل کارت است و به‌جای پلاک انتخاب
+    می‌شود. روی پروندهٔ ۲۹۴ دقیقاً همین شد: کادر ۱۶۰۵×۳۹۴ (کل نوار، شامل
+    VIN و برچسب) نسبت ابعادش ۴٫۰۷ بود و از فیلتر رد شد.
+
+    پاک‌کردنِ کورکورانهٔ چند پیکسل از هر طرف جواب نمی‌دهد: روی همان تصویر،
+    خودِ پلاک هم لبهٔ پایین را لمس می‌کند و با آن پاک می‌شود. پس فقط
+    سطر/ستون‌های لبه‌ای که **تقریباً یکدست** سفیدند برداشته می‌شوند —
+    یعنی چیزی که واقعاً یک خط است، نه محتوا.
+    """
+    height, width = mask.shape[:2]
+
+    if height < 8 or width < 8:
+        return mask
+
+    # کپی، چون ماسکِ صداکننده نباید زیر پایش عوض شود
+    mask = mask.copy()
+
+    limit = min(
+        max(EDGE_LINE_MIN_MAX, int(height * EDGE_LINE_MAX_RATIO)),
+        height // 4,
+        width // 4,
+    )
+
+    def strip(get, clear):
+        """تا سقف مجاز، لبه را لایه‌لایه بردار — هر بار با میانگینِ همان لحظه."""
+        for step in range(limit):
+            if get(step).mean() / 255.0 <= ratio:
+                return
+            clear(step)
+
+    strip(lambda i: mask[i, :], lambda i: mask.__setitem__((i, slice(None)), 0))
+    strip(lambda i: mask[height - 1 - i, :], lambda i: mask.__setitem__((height - 1 - i, slice(None)), 0))
+    strip(lambda i: mask[:, i], lambda i: mask.__setitem__((slice(None), i), 0))
+    strip(lambda i: mask[:, width - 1 - i], lambda i: mask.__setitem__((slice(None), width - 1 - i), 0))
+
+    return mask
+
+
+# ---------------------------------------------------
+
 def find_plate_frame(gray):
     """
     کادر مستطیلی پلاک را در یک‌سومِ پایینی کارت پیدا می‌کند.
@@ -192,6 +291,8 @@ def find_plate_frame(gray):
         cv2.MORPH_CLOSE,
         np.ones((7, 7), np.uint8)
     )
+
+    mask = clear_edge_lines(mask)
 
     contours, _ = cv2.findContours(
         mask,
@@ -300,18 +401,20 @@ def locate_plate(image):
 
 # ---------------------------------------------------
 
-def crop_plate(image):
+def plate_bands(image):
     """
-    نوار متنِ پلاک. اگر کادر پلاک پیدا شود از روی نسخهٔ صاف‌شده بریده
-    می‌شود (پایدار در برابر چرخش)، وگرنه برش نسبی قدیمی انجام می‌شود.
+    دو نوارِ پلاک با یک بار مکان‌یابی: (نوار اصلی، نوار کد استان).
+
+    نوار دوم None است وقتی کادر پلاک پیدا نشده باشد؛ آن‌وقت فقط برش نسبیِ
+    پشتیبان برای نوار اصلی می‌ماند و چیدمان دوکادره قابل تشخیص نیست.
     """
     plate = locate_plate(image)
 
     if plate is not None:
-        return plate[
-            BAND_TOP:BAND_BOTTOM,
-            BAND_LEFT:BAND_RIGHT,
-        ]
+        return (
+            plate[BAND_TOP:BAND_BOTTOM, BAND_LEFT:BAND_RIGHT],
+            plate[PROVINCE_TOP:PROVINCE_BOTTOM, PROVINCE_LEFT:PROVINCE_RIGHT],
+        )
 
     gray = to_gray(image)
 
@@ -325,7 +428,12 @@ def crop_plate(image):
     y1 = int(height * 0.817)
     y2 = int(height * 0.986)
 
-    return gray[y1:y2, x1:x2]
+    return gray[y1:y2, x1:x2], None
+
+
+def crop_plate(image):
+    """نوار متنِ پلاک — همان چیزی که plate_bands اول برمی‌گرداند."""
+    return plate_bands(image)[0]
 
 
 # ---------------------------------------------------
@@ -884,11 +992,120 @@ def read_letter_group(binary, group):
 
 # ---------------------------------------------------
 
-def read_plate(binary, boxes):
+def read_province(province_band):
+    """
+    کد استان از کادر کوچک «ایران» — دو رقم زیر واژهٔ «ایران».
+
+    خالی‌بودن این کادر عادی است (قالب فعلی کد استان را داخل کادر اصلی چاپ
+    می‌کند)، پس نبودِ رقم خطا نیست و None برمی‌گردد.
+    """
+    if province_band is None or province_band.size == 0:
+        return None
+
+    band = to_gray(province_band)
+
+    if band is None or min(band.shape[:2]) < 8:
+        return None
+
+    _, binary = binarize_band(band)
+
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+
+    height, width = binary.shape[:2]
+
+    boxes = [
+        (stats[index, cv2.CC_STAT_LEFT], stats[index, cv2.CC_STAT_TOP],
+         stats[index, cv2.CC_STAT_WIDTH], stats[index, cv2.CC_STAT_HEIGHT])
+        for index in range(1, count)
+        if stats[index, cv2.CC_STAT_HEIGHT] > height * 0.30
+        and stats[index, cv2.CC_STAT_WIDTH] < width * 0.60
+        and stats[index, cv2.CC_STAT_HEIGHT] < height * 0.95
+    ]
+
+    # ادغام نقطه پیش از شمارش، وگرنه رقمی که به دو تکه شکسته با شمارش ۳ رد
+    # می‌شود و ادغام هیچ‌وقت به کارش نمی‌آید.
+    boxes = merge_dots(sorted(boxes, key=lambda box: box[0]))
+
+    if len(boxes) != PROVINCE_DIGITS:
+        return None
+
+    digits = ""
+
+    for x, y, w, h in boxes:
+        digit, score = match_digit(binary[y:y + h, x:x + w])[:2]
+
+        if score < PROVINCE_MIN_SCORE:
+            return None
+
+        digits += digit
+
+    if len(digits) != PROVINCE_DIGITS:
+        return None
+
+    # کد استان ایران دو رقمی و از ۱۰ به بالاست؛ «۰۹» یا «۰۰» یعنی نویز.
+    plain = digits.translate(str.maketrans(PERSIAN_DIGITS, "0123456789"))
+
+    if not plain.isdigit() or int(plain) < 10:
+        return None
+
+    return digits
+
+
+# ---------------------------------------------------
+
+def read_split_plate(binary, boxes, province):
+    """
+    چیدمانی که کد استان داخل کادر «ایران» است، نه داخل کادر اصلی.
+
+    کادر اصلی فقط سه توکن دارد — به ترتیب دیداری «۹۷ س ۹۰۰» — و رقم استان
+    از کادر کناری آمده. خروجی مستقیم به **قالب رسمی** است، چون این ترتیب
+    وارونهٔ حالت پنج‌توکنی نیست و دادنش به format_plate فقط خرابش می‌کند.
+
+    None یعنی کادر اصلی این شکل را نداشت؛ صداکننده به مسیر عادی برمی‌گردد.
+    """
+    groups = group_boxes(boxes, SPLIT_TOKEN_COUNT)
+
+    if len(groups) != SPLIT_TOKEN_COUNT:
+        return None
+
+    two = read_digit_group(binary, groups[0], SPLIT_DIGIT_LENGTHS[0])
+    letter = read_letter_group(binary, groups[SPLIT_LETTER_INDEX])
+    three = read_digit_group(binary, groups[2], SPLIT_DIGIT_LENGTHS[2])
+
+    if len(two) != 2 or len(three) != 3 or letter not in PLATE_LETTERS:
+        return None
+
+    return f"{two} {letter} {three} {PLATE_COUNTRY_WORD} {province}"
+
+
+# ---------------------------------------------------
+
+def read_plate(binary, boxes, province_band=None):
     """
     توکن‌های پلاک را به ترتیب دیداری (چپ به راست) برمی‌گرداند؛
     مثلاً «۶۷ ایران ۳۴۵ ب ۱۲». format_plate آن را به قالب رسمی می‌چیند.
+
+    استثنا: چیدمان دوکادره (کد استان داخل کادر «ایران») از همین‌جا به قالب
+    رسمی برمی‌گردد — توضیحش در read_split_plate.
     """
+    # داورِ چیدمان **شمار تکه‌های کادر اصلی** است، نه شمار گروه‌ها و نه
+    # به‌تنهایی رقمِ کادر «ایران»:
+    #   • group_boxes همیشه به تعداد خواسته‌شده گروه می‌سازد (روی بزرگ‌ترین
+    #     فاصله‌ها می‌شکند)، پس «سه گروه شد» چیزی ثابت نمی‌کند.
+    #   • رقمِ کادر «ایران» به‌تنهایی هم کافی نبود: روی نمونهٔ نویزی دو لکه
+    #     «۴۰» خوانده شدند و پلاکِ درست را خراب کردند. (کف اطمینانِ
+    #     PROVINCE_MIN_SCORE همان را هم جدا می‌گیرد، ولی دو نگهبان بهتر است.)
+    # قالب یک‌کادره واژهٔ «ایران» را هم داخل کادر اصلی دارد، پس همیشه حدود
+    # دوازده تکه است؛ چیدمان دوکادره شش تکه.
+    if len(boxes) <= MAX_SPLIT_BOXES:
+        province = read_province(province_band)
+
+        if province is not None:
+            split = read_split_plate(binary, boxes, province)
+
+            if split is not None:
+                return split
+
     groups = group_boxes(boxes)
 
     if len(groups) != PLATE_TOKEN_COUNT:
@@ -1033,12 +1250,12 @@ def vehicle_card_ocr(image_path, debug_path=None):
         crop_vin(image)
     )
 
-    plate_gray, binary, boxes = segment_plate(
-        crop_plate(image)
-    )
+    main_band, province_band = plate_bands(image)
+
+    plate_gray, binary, boxes = segment_plate(main_band)
 
     plate_text = format_plate(
-        read_plate(binary, boxes)
+        read_plate(binary, boxes, province_band)
     )
 
     if debug_path is not None:
