@@ -161,22 +161,196 @@ class CaseReviewController extends Controller
 
     public function show(Request $request, PermitCase $case): View
     {
+        $user = $request->user();
+
+        // مرز این صفحه نقشِ تنها نیست: کارشناس هر پرونده‌ای را می‌بیند (کارش
+        // همین است)، ولی متقاضی فقط پروندهٔ خودش را. روت هر دو را راه می‌دهد
+        // و تفکیک این‌جاست، چون به مالکیتِ همین ردیف بستگی دارد.
+        abort_unless(
+            $user->canReviewCases() || (int) $case->user_id === (int) $user->id,
+            403,
+            'این پرونده متعلق به کاربر دیگری است و شما اجازهٔ دیدنش را ندارید.',
+        );
+
         $case = $this->loadCase($case);
 
         $checks = $case->validationResults;
 
+        $panels = $this->documentPanels($case);
+
         return view('cases.show', [
             'case' => $case,
-            'panels' => $this->documentPanels($case),
+            'panels' => $panels,
+            'actions' => $this->nextActions($case, $panels, (bool) $user->canReviewCases()),
             'checksByScope' => $this->checksByScope($checks),
             'checkTotals' => $this->checkTotals($checks),
             'components' => $case->scoreComponents->sortByDesc('contribution')->values(),
             'reviewable' => $this->reviewable($case),
+            // متقاضی همین صفحه را فقط‌خواندنی می‌بیند: نه فرم اصلاح فیلد، نه
+            // فرم تصمیم. روت‌های آن دو هم اصلاً برایش باز نیستند، پس این پرچم
+            // فقط دکمهٔ بی‌فایده را حذف می‌کند، نه اینکه تنها نگهبان باشد.
+            'canReview' => (bool) $user->canReviewCases(),
             'correctors' => $this->correctorNames($case),
             'pending' => in_array($case->status, ['submitted', 'processing'], true),
             'editingDocument' => (int) session('editing_document', 0),
             'datasetOn' => $this->datasetCollectionEnabled(),
         ]);
+    }
+
+    /**
+     * «حالا چه کار کنم؟» — چند جملهٔ عملی بالای صفحهٔ نتیجه.
+     *
+     * انگیزه‌اش شکایت تسک ۶۶۱ بود: صفحه امتیاز و فهرست ایرادها را نشان می‌داد
+     * ولی نمی‌گفت کاربر باید چه کند. فهرست ایراد جواب «چه شد» را می‌دهد؛ این
+     * بخش جواب «حالا چه کنم» را.
+     *
+     * هیچ داده‌ای این‌جا دوباره محاسبه نمی‌شود — همه‌اش از همان پنل‌ها و
+     * ردیف‌های اعتبارسنجی درمی‌آید که صفحه از قبل دارد. قاعدهٔ اولویت: اول
+     * چیزی که **کاربر** می‌تواند درستش کند (مدرک نیامده، فایل رد شده، تصویر
+     * کوچک)، بعد چیزی که **کارشناس** باید درستش کند (مقدار خوانده‌نشده،
+     * ناهمخوانی).
+     *
+     * متن برای متقاضی و کارشناس فرق می‌کند: متقاضی مدرک را دوباره بارگذاری
+     * می‌کند، کارشناس مقدار را دستی وارد می‌کند.
+     *
+     * @param  list<array<string, mixed>>  $panels
+     * @return list<array{icon: string, title: string, detail: string, document: ?string}>
+     */
+    private function nextActions(PermitCase $case, array $panels, bool $canReview): array
+    {
+        $actions = [];
+
+        foreach ($panels as $panel) {
+            $label = (string) $panel['type']->label_fa;
+
+            if ($panel['state'] === 'missing') {
+                if ($panel['required']) {
+                    $actions[] = [
+                        'icon' => '📂',
+                        'title' => 'مدرک «'.$label.'» هنوز بارگذاری نشده است.',
+                        'detail' => $canReview
+                            ? 'تا این مدرک نیاید، پرونده ناقص می‌ماند و امتیاز کامل نمی‌شود.'
+                            : 'همین صفحه، در کارت همین مدرک، دکمهٔ بارگذاری هست.',
+                        'document' => $label,
+                    ];
+                }
+
+                continue;
+            }
+
+            if ($panel['state'] === 'rejected') {
+                $blocking = null;
+
+                foreach ($panel['issues'] as $issue) {
+                    if (($issue['severity'] ?? 'error') === 'error') {
+                        $blocking = $issue;
+
+                        break;
+                    }
+                }
+
+                $actions[] = [
+                    'icon' => '⛔',
+                    'title' => 'فایل «'.$label.'» در بررسی اولیه رد شد'
+                        .($blocking === null ? '.' : ': '.$blocking['message_fa']),
+                    'detail' => (string) ($blocking['hint_fa'] ?? 'فایل سالم را دوباره بارگذاری کنید.'),
+                    'document' => $label,
+                ];
+
+                continue;
+            }
+
+            $actions = array_merge($actions, $this->unreadFieldActions($panel, $label, $canReview));
+        }
+
+        foreach ($case->validationResults as $check) {
+            if ($check->scope !== 'cross' || ! in_array($check->status, ['failed', 'warning'], true)) {
+                continue;
+            }
+
+            $actions[] = [
+                'icon' => '🔀',
+                'title' => (string) $check->message_fa,
+                'detail' => $canReview
+                    ? 'مقدار هر دو مدرک را با تصویرشان بسنجید؛ اگر خطای خواندن بود اصلاحش کنید.'
+                    : 'اگر مقدارها روی مدارک شما یکی است، خطای خواندن بوده و کارشناس اصلاحش می‌کند.',
+                'document' => null,
+            ];
+        }
+
+        return array_slice($actions, 0, 6);
+    }
+
+    /**
+     * فیلدهای اجباریِ خوانده‌نشدهٔ یک مدرک، با راهنمای متناسب با علتش.
+     *
+     * سه علت متفاوت، سه راهنمای متفاوت — و ترتیبشان همان ترتیب «چقدر احتمال
+     * دارد کاربر بتواند خودش حلش کند» است:
+     *   تصویر از رزولوشن مرجع کوچک‌تر است  → نسخهٔ اصلی را بفرست
+     *   موتور خواند ولی شکلش معتبر نبود      → نسخهٔ واضح‌تر، یا ورود دستی
+     *   هیچ ردپایی نیست                      → کارشناس از روی تصویر وارد کند
+     *
+     * @param  array<string, mixed>  $panel
+     * @return list<array{icon: string, title: string, detail: string, document: ?string}>
+     */
+    private function unreadFieldActions(array $panel, string $label, bool $canReview): array
+    {
+        $unread = [];
+
+        foreach ($panel['fields'] as $field) {
+            if ($field['required'] && $field['value'] === '') {
+                $unread[$field['key']] = $field['label'];
+            }
+        }
+
+        if ($unread === []) {
+            return [];
+        }
+
+        $undersized = false;
+
+        foreach ($panel['issues'] as $issue) {
+            if (($issue['code'] ?? '') === 'file.below_reference_width') {
+                $undersized = true;
+            }
+        }
+
+        $unreadable = [];
+
+        foreach ($panel['checks'] as $check) {
+            if (str_starts_with((string) $check->rule_key, 'document.missing_required.')) {
+                $unreadable = is_array($check->details['unreadable'] ?? null)
+                    ? $check->details['unreadable']
+                    : [];
+            }
+        }
+
+        $names = implode('، ', array_map(static fn (string $name): string => '«'.$name.'»', $unread));
+
+        $detail = match (true) {
+            $undersized => 'تصویر این مدرک از اندازهٔ لازم کوچک‌تر است. '
+                .($canReview
+                    ? 'از متقاضی نسخهٔ اصلی همان عکس را بخواهید، یا مقدار را از روی همین تصویر دستی وارد کنید.'
+                    : 'نسخهٔ اصلی همان عکس را بارگذاری کنید — پیام‌رسان‌ها عکس را کوچک می‌کنند؛ فایل را به‌صورت «سند» بفرستید.'),
+            array_intersect_key($unreadable, $unread) !== [] => 'مقدار روی مدرک هست و موتور چیزی هم خواند، '
+                .'ولی خوانده‌شده شکل معتبری نداشت. '
+                .($canReview
+                    ? 'از روی تصویر بخوانید و دستی وارد کنید.'
+                    : 'نسخهٔ واضح‌تری از همین مدرک بارگذاری کنید؛ وگرنه کارشناس مقدار را دستی وارد می‌کند.'),
+            default => $canReview
+                ? 'مقدار را از روی تصویر همین مدرک بخوانید و دستی وارد کنید.'
+                : 'کارشناس این مقدار را از روی تصویر مدرک وارد می‌کند؛ کاری از شما لازم نیست.',
+        };
+
+        return [[
+            'icon' => '🔍',
+            'title' => count($unread) === 1
+                ? 'فیلد '.$names.' از «'.$label.'» خوانده نشد.'
+                : PersianValue::toPersianDigits((string) count($unread))
+                    .' فیلد از «'.$label.'» خوانده نشد: '.$names.'.',
+            'detail' => $detail,
+            'document' => $label,
+        ]];
     }
 
     /** بارگذاری کامل پرونده با همهٔ رابطه‌هایی که صفحه لازم دارد. */

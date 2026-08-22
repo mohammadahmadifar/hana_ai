@@ -535,6 +535,93 @@ class CaseReviewTest extends TestCase
     // ==================================================================
 
     /** پروندهٔ ثبت‌شده با همهٔ مدارک لازم و مدارکِ OCR‌شده. */
+    // ------------------------------------------------------------------
+    // «حالا چه کار کنم؟» — تسک ۶۶۷
+    // ------------------------------------------------------------------
+
+    /** متقاضی باید قدم بعدیِ خودش را ببیند، نه فقط امتیاز و فهرست ایراد. */
+    public function test_the_applicant_is_told_what_to_do_about_an_unread_field(): void
+    {
+        $owner = $this->applicantUser();
+        $case = $this->reviewableCase($owner);
+
+        $this->fillFields($case, 90.0);
+
+        // «شماره پلاک» خوانده نشده، و تصویرش هم کوچک بوده
+        ExtractedField::query()
+            ->where('case_id', $case->id)
+            ->where('field_key', 'plate_number')
+            ->delete();
+
+        $this->documentOf($case, 'vehicle_card')->update([
+            'precheck_issues' => [[
+                'code' => 'file.below_reference_width',
+                'message_fa' => 'عرض این تصویر کوچک است.',
+                'hint_fa' => 'نسخهٔ اصلی را بفرستید.',
+                'severity' => 'warning',
+                'scored' => false,
+            ]],
+        ]);
+
+        $response = $this->actingAs($owner)->get(route('cases.show', $case));
+
+        $response->assertOk();
+        $response->assertSee('حالا چه کار کنم؟');
+        $response->assertSee('شماره پلاک', false);
+        // متن متقاضی: خودش می‌تواند نسخهٔ بهتر بفرستد
+        $response->assertSee('نسخهٔ اصلی همان عکس را بارگذاری کنید', false);
+    }
+
+    /** همان پرونده برای کارشناس، ولی با راهنمای کارِ خودش. */
+    public function test_the_expert_is_told_to_type_the_value_in(): void
+    {
+        $case = $this->reviewableCase();
+
+        $this->fillFields($case, 90.0);
+
+        ExtractedField::query()
+            ->where('case_id', $case->id)
+            ->where('field_key', 'plate_number')
+            ->delete();
+
+        $response = $this->actingAs($this->expertUser())->get(route('cases.show', $case));
+
+        $response->assertOk();
+        $response->assertSee('حالا چه کار کنم؟');
+        $response->assertSee('دستی وارد کنید', false);
+    }
+
+    /** مدرکی که اصلاً نیامده، اولین کاری است که باید انجام شود. */
+    public function test_a_missing_document_is_the_first_thing_the_panel_asks_for(): void
+    {
+        $owner = $this->applicantUser();
+        $case = $this->reviewableCase($owner);
+
+        $this->fillFields($case, 90.0);
+
+        $this->documentOf($case, 'vehicle_card')->delete();
+
+        $response = $this->actingAs($owner)->get(route('cases.show', $case));
+
+        $response->assertOk();
+        $response->assertSee('هنوز بارگذاری نشده است', false);
+    }
+
+    /** پروندهٔ بی‌عیب کارت خالی نمی‌گیرد. */
+    public function test_a_clean_case_shows_no_action_panel(): void
+    {
+        $case = $this->reviewableCase();
+
+        $this->fillFields($case, 95.0);
+
+        $response = $this->actingAs($this->expertUser())->get(route('cases.show', $case));
+
+        $response->assertOk();
+        $response->assertDontSee('حالا چه کار کنم؟');
+    }
+
+    // ------------------------------------------------------------------
+
     private function reviewableCase(?\App\Models\User $owner = null): PermitCase
     {
         $case = $this->makeCaseWithDocuments('issue', $owner);

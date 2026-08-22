@@ -4,9 +4,15 @@
 @section('page_title', 'نتیجهٔ پروندهٔ '.\App\Support\PersianValue::toPersianDigits($case->code))
 
 @section('topbar_actions')
-    <a href="{{ route('cases.review') }}" class="btn btn--ghost btn--sm">🔍 صف بررسی</a>
+    {{-- «صف بررسی» فقط برای کسی که روتش برایش باز است؛ متقاضی با کلیک روی آن
+         ۴۰۳ می‌گرفت. --}}
+    @if ($canReview)
+        <a href="{{ route('cases.review') }}" class="btn btn--ghost btn--sm">🔍 صف بررسی</a>
+    @endif
     <a href="{{ route('cases.documents.edit', $case) }}" class="btn btn--ghost btn--sm">📎 مدارک</a>
-    <a href="#decision" class="btn btn--primary btn--sm">⬇ رفتن به تصمیم</a>
+    <a href="#decision" class="btn btn--primary btn--sm">
+        {{ $canReview ? '⬇ رفتن به تصمیم' : '⬇ رفتن به نتیجه' }}
+    </a>
 @endsection
 
 @php
@@ -85,14 +91,25 @@
             <div class="alert alert--warn" role="status">
                 <span class="alert__icon" aria-hidden="true">👤</span>
                 <div class="alert__body">
-                    <strong>این پرونده منتظر تصمیم شماست.</strong>
-                    <span>
-                        امتیاز اطمینانش بین آستانهٔ رد و آستانهٔ تایید افتاده، پس سامانه عمداً تصمیم نگرفته است.
-                        مقدار هر فیلد را با تصویر همان مدرک بسنجید، اشتباه‌ها را اصلاح کنید و بعد تصمیم بگیرید.
-                    </span>
+                    @if ($canReview)
+                        <strong>این پرونده منتظر تصمیم شماست.</strong>
+                        <span>
+                            امتیاز اطمینانش بین آستانهٔ رد و آستانهٔ تایید افتاده، پس سامانه عمداً تصمیم نگرفته است.
+                            مقدار هر فیلد را با تصویر همان مدرک بسنجید، اشتباه‌ها را اصلاح کنید و بعد تصمیم بگیرید.
+                        </span>
+                    @else
+                        <strong>این پرونده در نوبت بررسی کارشناس است.</strong>
+                        <span>
+                            امتیاز اطمینانش بین آستانهٔ رد و آستانهٔ تایید افتاده، پس سامانه عمداً خودش تصمیم نگرفته
+                            و پرونده را به کارشناس سپرده است. تا اعلام نتیجه کاری لازم نیست انجام دهید.
+                        </span>
+                    @endif
                 </div>
             </div>
         @endif
+
+        {{-- «حالا چه کار کنم؟» — پیش از امتیاز، چون کاربر اول دنبال کارِ بعدی است --}}
+        @include('cases._review-actions', ['actions' => $actions, 'canReview' => $canReview])
 
         {{-- امتیاز اطمینان و مؤلفه‌ها --}}
         @include('cases._review-score', ['case' => $case, 'components' => $components])
@@ -102,7 +119,7 @@
             <div class="row">
                 <h2>مدارک و فیلدهای خوانده‌شده</h2>
                 <div class="spacer"></div>
-                @if ($reviewable)
+                @if ($reviewable && $canReview)
                     <span class="tiny faint">
                         مقدارها قابل ویرایش‌اند.
                         @if ($datasetOn)
@@ -118,7 +135,8 @@
                 @include('cases._review-document', [
                     'panel' => $panel,
                     'case' => $case,
-                    'reviewable' => $reviewable,
+                    // برای متقاضی فقط‌خواندنی: پنل مدرک بدون فرم اصلاح فیلد
+                    'reviewable' => $reviewable && $canReview,
                     'correctors' => $correctors,
                     'editingDocument' => $editingDocument,
                 ])
@@ -141,7 +159,11 @@
         ])
 
         {{-- تصمیم نهایی --}}
-        @include('cases._review-decision', ['case' => $case, 'reviewable' => $reviewable])
+        @include('cases._review-decision', [
+            'case' => $case,
+            'reviewable' => $reviewable,
+            'canReview' => $canReview,
+        ])
 
     </div>
 
