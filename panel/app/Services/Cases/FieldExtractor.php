@@ -61,7 +61,18 @@ final class FieldExtractor
      *
      * anchor: nid = سطر کد ملی ، date = سطر اولین تاریخ
      *
-     * @var array<string, array<string, array{anchor: string, offset: int, tokens: int}>>
+     * `below` یعنی روی این قالب مقدار **زیر** برچسبش چاپ می‌شود، نه کنارش.
+     * تنها گواهینامه این‌طور است: «نام و نام خانوادگی» در یک سطر و خودِ نام
+     * در سطر بعد. بدون این پرچم، هر دو منبعِ readName (چیدمان و برچسب) روی
+     * همان سطرِ برچسب می‌افتند که هیچ نامی ندارد و فیلد خالی می‌ماند — روی
+     * ۲۵ نمونه، ۱۱ تا از ۲۵ نام گواهینامه دقیقاً به همین دلیل خالی بود، در
+     * حالی که OCR نام را درست خوانده بود و یک سطر پایین‌تر نشسته بود.
+     *
+     * عمداً پرچمِ هر فیلد است نه رفتار پیش‌فرض: روی کارت ملی «نام» و «نام
+     * خانوادگی» سطرهای پشت سر هم‌اند، پس اگر «نام» به سطر بعد سُر بخورد،
+     * نام خانوادگی را به‌جای نام برمی‌دارد.
+     *
+     * @var array<string, array<string, array{anchor: string, offset: int, tokens: int, below?: bool}>>
      */
     private const NAME_LAYOUT = [
         'national_card' => [
@@ -70,7 +81,7 @@ final class FieldExtractor
             'father_name' => ['anchor' => 'date', 'offset' => 1, 'tokens' => 2],
         ],
         'driving_license' => [
-            'full_name' => ['anchor' => 'nid', 'offset' => 1, 'tokens' => 3],
+            'full_name' => ['anchor' => 'nid', 'offset' => 1, 'tokens' => 3, 'below' => true],
         ],
         'vehicle_card' => [
             'full_name' => ['anchor' => 'nid', 'offset' => -1, 'tokens' => 2],
@@ -630,9 +641,26 @@ final class FieldExtractor
     {
         $layout = self::NAME_LAYOUT[$typeKey][$fieldKey] ?? null;
         $maxTokens = $layout['tokens'] ?? 3;
+        $below = (bool) ($layout['below'] ?? false);
 
         /** @var list<array{line: int, base: float}> $sources */
         $sources = [];
+
+        // سطرِ زیرِ هر منبع، درست بعد از خودش امتحان می‌شود و نه دیرتر: ترتیب
+        // sources ترتیب اولویت است و اولین سطری که نام قابل‌قبول بدهد برنده
+        // است. پایهٔ اطمینانش عمداً پایین‌تر می‌ماند، چون «سطر بعدِ برچسب»
+        // شاهد ضعیف‌تری از «خودِ سطر برچسب» است.
+        $add = function (?int $line, float $base) use (&$sources, $text, $below): void {
+            if ($line === null) {
+                return;
+            }
+
+            $sources[] = ['line' => $line, 'base' => $base];
+
+            if ($below && $this->looksLikeNameLine($text, $line + 1)) {
+                $sources[] = ['line' => $line + 1, 'base' => min($base, self::FROM_LAYOUT)];
+            }
+        };
 
         if ($layout !== null) {
             $anchor = $anchors[$layout['anchor']] ?? null;
@@ -641,7 +669,7 @@ final class FieldExtractor
                 $line = $anchor + $layout['offset'];
 
                 if ($this->looksLikeNameLine($text, $line)) {
-                    $sources[] = ['line' => $line, 'base' => self::FROM_LAYOUT];
+                    $add($line, self::FROM_LAYOUT);
                 }
             }
         }
@@ -649,10 +677,10 @@ final class FieldExtractor
         $hit = LabelLocator::find($text, LabelBook::labels($typeKey, $fieldKey));
 
         if ($hit !== null) {
-            $sources[] = [
-                'line' => $hit['line'],
-                'base' => $hit['exact'] ? self::FROM_EXACT_LABEL : self::FROM_FUZZY_LABEL,
-            ];
+            $add(
+                $hit['line'],
+                $hit['exact'] ? self::FROM_EXACT_LABEL : self::FROM_FUZZY_LABEL,
+            );
         }
 
         foreach ($sources as $source) {
