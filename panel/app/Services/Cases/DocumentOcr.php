@@ -58,6 +58,18 @@ final class DocumentOcr
     /** طول ستون `ocr_runs.engine_version`. */
     private const VERSION_LIMIT = 40;
 
+    /**
+     * سقف متن هر «نسخه» (بزرگ‌نمایی) در کلید extra.
+     *
+     * نسخه‌ها کنار هم در یک ستون json می‌نشینند، پس سقفشان از سقف متن اصلی
+     * تنگ‌تر است: متن یک مدرک چند صد کاراکتر است و این عدد فقط جلوی خروجی
+     * معیوب را می‌گیرد.
+     */
+    private const VARIANT_TEXT_LIMIT = 20_000;
+
+    /** بیشترین تعداد نسخه‌ای که ذخیره می‌شود. */
+    private const MAX_VARIANTS = 6;
+
     private ?string $engineVersion = null;
 
     private bool $engineVersionAsked = false;
@@ -164,6 +176,11 @@ final class DocumentOcr
                 'config' => $result['config'] ?? null,
                 'char_count' => (int) ($result['char_count'] ?? mb_strlen($rawText)),
                 'line_count' => (int) ($result['line_count'] ?? 0),
+                // برای توضیح نتیجه لازم است: با چه عرضی خوانده شد و عرض مرجع
+                // این نوع مدرک چقدر بود (تسک ۶۶۲ و پیام «تصویر کوچک است»).
+                'source_width' => isset($result['source_width']) ? (int) $result['source_width'] : null,
+                'reference_width' => isset($result['reference_width']) ? (int) $result['reference_width'] : null,
+                'variants' => is_array($extra['variants'] ?? null) ? count($extra['variants']) : null,
                 'engine_duration_ms' => isset($result['duration_ms']) ? (int) $result['duration_ms'] : null,
             ]),
             'raw_text' => $rawText,
@@ -300,15 +317,27 @@ final class DocumentOcr
      * `vin` و `plate` را FieldExtractor مستقیم می‌خواند؛ `error` هم پیام مسیر
      * ویژهٔ کارت خودرو است که اگر بیاید باید دیده شود.
      *
+     * `variants` (تسک ۶۶۲) متن همان مدرک در بزرگ‌نمایی‌های دیگر است. این‌جا
+     * ذخیره می‌شود و نه در ستونی تازه، چون `extra` از قبل ستون json است و
+     * حجم واقعی‌اش چند صد کاراکتر در هر نسخه — مهاجرت برای این اندازه داده
+     * هزینهٔ بی‌دلیلی است. ذخیره لازم است چون «پردازش دوباره»ی استخراج فیلد
+     * باید بتواند بدون اجرای دوبارهٔ موتور همان نسخه‌ها را ببیند.
+     *
      * @param  array<string, mixed>  $result
      * @return array<string, mixed>|null
      */
     private function extra(array $result): ?array
     {
         $extra = $result['extra'] ?? null;
+        $variants = $this->variants($result);
+
+        // نه کلید extra ای آمد نه نسخه‌ای: چیزی برای ذخیره نیست.
+        if (! is_array($extra) && $variants === []) {
+            return null;
+        }
 
         if (! is_array($extra)) {
-            return null;
+            $extra = [];
         }
 
         $clean = [
@@ -320,7 +349,60 @@ final class DocumentOcr
             $clean['error'] = $this->clip($extra['error'], 500);
         }
 
+        if ($variants !== []) {
+            $clean['variants'] = $variants;
+        }
+
         return $clean;
+    }
+
+    /**
+     * نسخه‌های چندمقیاسی، به همان ترتیبی که موتور داده (نسخهٔ اول = مقیاس ۱.۰).
+     *
+     * نسخهٔ بدون متن دور ریخته می‌شود: چیزی برای استخراج ندارد و فقط ستون را
+     * چاق می‌کند. `image_path` هم ذخیره نمی‌شود — فایل موقت است و نگه‌داشتن
+     * مسیرش در دیتابیس فقط توهم دسترسی می‌سازد.
+     *
+     * @param  array<string, mixed>  $result
+     * @return list<array<string, mixed>>
+     */
+    private function variants(array $result): array
+    {
+        $variants = $result['variants'] ?? null;
+
+        if (! is_array($variants)) {
+            return [];
+        }
+
+        $out = [];
+
+        foreach ($variants as $variant) {
+            if (! is_array($variant)) {
+                continue;
+            }
+
+            $rawText = $this->clip((string) ($variant['raw_text'] ?? ''), self::VARIANT_TEXT_LIMIT);
+
+            if (trim($rawText) === '') {
+                continue;
+            }
+
+            $variantExtra = is_array($variant['extra'] ?? null) ? $variant['extra'] : [];
+
+            $out[] = [
+                'scale' => isset($variant['scale']) ? (float) $variant['scale'] : null,
+                'width' => isset($variant['width']) ? (int) $variant['width'] : null,
+                'raw_text' => $rawText,
+                'vin' => $this->text($variantExtra['vin'] ?? null),
+                'plate' => $this->text($variantExtra['plate'] ?? null),
+            ];
+
+            if (count($out) >= self::MAX_VARIANTS) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     /**

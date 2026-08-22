@@ -7,6 +7,7 @@ use App\Models\DatasetAnnotation;
 use App\Models\DatasetSample;
 use App\Models\DatasetTag;
 use App\Models\DocumentType;
+use App\Models\ServiceType;
 use App\Models\TestImage;
 use App\Services\HanaEngine;
 use App\Support\PersianValue;
@@ -268,7 +269,29 @@ class TestImageController extends Controller
             'sidecar' => $sidecar,
             'ocr' => $ocr,
             'inDataset' => DatasetSample::where('path', 'generated/'.$testImage->path)->exists(),
+            // خدمت‌هایی که این نوع مدرک را لازم دارند — ورودی دکمهٔ «بفرست به
+            // فرایند بررسی» (تسک ۶۲۷). برای کارشناس داده خالی می‌ماند چون او
+            // اصلاً پرونده نمی‌سازد و دکمه هم برایش نمایش داده نمی‌شود.
+            'caseServices' => $this->caseServices($request, $testImage),
         ]);
+    }
+
+    /**
+     * خدمت‌های فعالی که این نوع مدرک جزو مدارک لازمشان است.
+     *
+     * @return \Illuminate\Support\Collection<int, ServiceType>
+     */
+    private function caseServices(Request $request, TestImage $testImage): \Illuminate\Support\Collection
+    {
+        if (! $request->user()->canReviewCases() || $testImage->document_type_id === null) {
+            return collect();
+        }
+
+        return ServiceType::query()
+            ->active()
+            ->whereHas('documentTypes', fn ($query) => $query->where('document_types.id', $testImage->document_type_id))
+            ->orderBy('sort')
+            ->get();
     }
 
     /**
@@ -276,6 +299,12 @@ class TestImageController extends Controller
      *
      * این کار حدود نیم تا سه ثانیه طول می‌کشد (تک تصویر)، پس همین‌جا
      * هم‌زمان انجام می‌شود و به صف نمی‌رود؛ صف برای تولید انبوه است.
+     *
+     * عمداً فقط مقیاس مرجع خوانده می‌شود، نه سه مقیاسِ پیش‌فرض تسک ۶۶۲:
+     * تصویر تستی همیشه دقیقاً در اندازهٔ قالب ساخته می‌شود، پس مقیاس‌های
+     * دیگر چیز تازه‌ای نمی‌گویند و فقط زمان همین درخواستِ هم‌زمان را سه
+     * برابر می‌کنند. سؤالی که این صفحه جواب می‌دهد «آیا قالب در رزولوشن
+     * مرجع خوانا چاپ شده؟» است، و همان مقیاس ۱.۰ است.
      */
     public function ocr(Request $request, TestImage $testImage): RedirectResponse
     {
@@ -297,6 +326,7 @@ class TestImageController extends Controller
                 documentType: $testImage->documentType?->key,
                 preprocess: true,
                 outDir: Storage::disk(self::DISK)->path('_preprocessed/'.now($timezone)->format('Y-m')),
+                scales: [1.0],
             );
         } catch (EngineException $exception) {
             return back()->withErrors(['ocr' => 'اجرای OCR ناموفق بود: '.$exception->getMessage()]);

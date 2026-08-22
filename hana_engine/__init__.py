@@ -39,6 +39,11 @@ WRITABLE_ROOTS = (
     ENGINE_ROOT / "dataset" / "processed",
     ENGINE_ROOT / "dataset" / "preprocessed",
     ENGINE_ROOT / "dataset" / "ocr_results",
+    # خروجی ابزارهای اندازه‌گیری (scripts/benchmark.py و hana:evaluate-extraction).
+    # عمداً بیرون از storage پنل است: آن ابزارها را root اجرا می‌کند و اگر
+    # پوشه‌ای در مسیر مشترکِ www-data بسازند، آپلود و کارگر صف بعداً به دیوار
+    # مجوز می‌خورند. این‌جا نیمهٔ موتور است و مالکش همان کاربر است.
+    ENGINE_ROOT / "dataset" / "benchmark",
 )
 
 

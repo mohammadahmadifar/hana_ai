@@ -382,6 +382,52 @@ class CaseOcrTest extends TestCase
     }
 
     /** @param array<string, mixed> $result */
+    // ------------------------------------------------------------------
+    // نسخه‌های چندمقیاسی — تسک ۶۶۲
+    // ------------------------------------------------------------------
+
+    public function test_engine_variants_are_stored_next_to_the_primary_text(): void
+    {
+        $document = $this->documentWithFile('national_card');
+
+        $this->engineReturns([
+            'raw_text' => 'متن مقیاس یک',
+            'source_width' => 885,
+            'reference_width' => 960,
+            'extra' => ['vin' => null, 'plate' => null],
+            'variants' => [
+                ['scale' => 1.0, 'width' => 960, 'raw_text' => 'متن مقیاس یک', 'extra' => []],
+                ['scale' => 1.25, 'width' => 1200, 'raw_text' => 'متن مقیاس یک و ربع', 'extra' => []],
+                // نسخهٔ بی‌متن چیزی برای استخراج ندارد و ذخیره نمی‌شود
+                ['scale' => 1.5, 'width' => 1440, 'raw_text' => '  ', 'extra' => []],
+            ],
+        ]);
+
+        $run = $this->ocr()->run($document);
+
+        $this->assertSame('متن مقیاس یک', $run->raw_text, 'raw_text همان نسخهٔ اول می‌ماند');
+        $this->assertCount(2, $run->extra['variants']);
+        $this->assertSame('متن مقیاس یک و ربع', $run->extra['variants'][1]['raw_text']);
+        $this->assertSame(1.25, $run->extra['variants'][1]['scale']);
+
+        // اندازهٔ تصویر و تعداد نسخه‌ها برای توضیح نتیجه لازم‌اند
+        $this->assertSame(885, $run->params['source_width']);
+        $this->assertSame(960, $run->params['reference_width']);
+        $this->assertSame(2, $run->params['variants']);
+    }
+
+    public function test_a_run_without_variants_keeps_the_old_shape(): void
+    {
+        $document = $this->documentWithFile('national_card');
+
+        $this->engineReturns(['raw_text' => 'متن', 'extra' => ['vin' => null, 'plate' => null]]);
+
+        $run = $this->ocr()->run($document);
+
+        $this->assertArrayNotHasKey('variants', $run->extra);
+        $this->assertNull($run->params['variants'] ?? null);
+    }
+
     private function engineReturns(array $result): void
     {
         $this->mock(HanaEngine::class, function (MockInterface $mock) use ($result): void {

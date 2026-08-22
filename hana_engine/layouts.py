@@ -142,6 +142,50 @@ def layout_keys():
     return list(LAYOUTS.keys())
 
 
+# اندازهٔ قالب‌ها یک بار خوانده و نگه داشته می‌شود؛ ocr_document برای هر مدرک
+# صدایش می‌زند و باز کردن دوبارهٔ فایل PNG در هر تماس بی‌دلیل است.
+_TEMPLATE_SIZES = {}
+
+
+def template_size(document_type):
+    """
+    (عرض، ارتفاع) قالب مرجع یک نوع مدرک — یا None اگر نوع ناشناخته باشد
+    یا فایل قالب سر جایش نباشد.
+
+    این «رزولوشن مرجع» است: اندازه‌ای که مقدارها با آن روی قالب چاپ می‌شوند و
+    پایپ‌لاین پیش‌پردازش و OCR برای همان تنظیم شده. تصویری که کاربر آپلود
+    می‌کند ممکن است هر اندازه‌ای باشد (تلگرام عکس را نصف می‌کند)، پس
+    hana_engine/ocr.py مقیاس‌هایش را نسبت به همین عدد می‌سازد نه نسبت به
+    اندازهٔ خودِ آپلود — وگرنه «۱.۲۵ برابر» برای یک عکس ۷۵۰ پیکسلی و یک عکس
+    ۳۰۰۰ پیکسلی دو معنای کاملاً متفاوت دارد.
+
+    عمداً استثنا پرتاب نمی‌کند: OCR روی مدرکی که قالب ندارد هم باید کار کند.
+    """
+    key = (document_type or "").strip()
+
+    if key in _TEMPLATE_SIZES:
+        return _TEMPLATE_SIZES[key]
+
+    size = None
+    layout = LAYOUTS.get(key)
+
+    if layout is not None:
+        template = ENGINE_ROOT / layout["template"]
+
+        if template.is_file():
+            try:
+                from PIL import Image
+
+                with Image.open(template) as image:
+                    size = image.size
+            except Exception:
+                size = None
+
+    _TEMPLATE_SIZES[key] = size
+
+    return size
+
+
 def get_layout(document_type):
     """دریافت چیدمان یک نوع مدرک؛ در صورت ناشناخته‌بودن خطای فارسی."""
     key = (document_type or "").strip()

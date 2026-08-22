@@ -153,11 +153,19 @@ def cmd_render_document(payload):
 def cmd_ocr_document(payload):
     from .ocr import ocr_document
 
+    scales = payload.get("scales")
+
+    if isinstance(scales, (list, tuple)):
+        scales = [float(value) for value in scales if isinstance(value, (int, float))]
+    else:
+        scales = None
+
     return ocr_document(
         path=payload.get("path"),
         document_type=payload.get("document_type"),
         preprocess=bool(payload.get("preprocess", True)),
         out_dir=payload.get("out_dir"),
+        scales=scales or None,
     )
 
 

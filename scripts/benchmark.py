@@ -18,6 +18,17 @@
     .venv/bin/python scripts/benchmark.py --number 25   # ۲۵ نمونهٔ تازه بساز و فقط همان‌ها را بسنج
     .venv/bin/python scripts/benchmark.py --last 25     # بدون تولید؛ ۲۵ نمونهٔ آخر
     .venv/bin/python scripts/benchmark.py --from 26 --to 50
+    .venv/bin/python scripts/benchmark.py --last 25 --variants   # مسیر پنل: OCR چندمقیاسی
+
+دو مسیر، دو عدد
+---------------
+بدون سوییچ، همان چیزی سنجیده می‌شود که `main.py` می‌سازد: یک OCR روی
+`dataset/preprocessed`. این «عدد پایهٔ پایان‌نامه» است.
+
+با `--variants` همان تصویرها از راهی می‌روند که **پنل** می‌رود:
+`hana_engine.ocr.ocr_document` که مدرک را در چند بزرگ‌نمایی می‌خواند (تسک ۶۶۲)
+و متن همهٔ نسخه‌ها پشت سر هم سنجیده می‌شود. کندتر است و همان معیار را
+روی مسیر واقعی پرونده می‌دهد.
 """
 
 from __future__ import annotations
@@ -127,11 +138,12 @@ def process_pending():
 # اندازه‌گیری
 
 
-def evaluate_range(document_type, first, last):
+def evaluate_range(document_type, first, last, use_variants=False):
     """
     خلاصهٔ یک نوع مدرک روی بازهٔ [first, last].
 
-    خروجی: (تعداد فیلد، تطابق کامل، جمع CER، تفکیک فیلدها)
+    `use_variants` یعنی متن از مسیر چندمقیاسی موتور گرفته شود، نه از
+    `dataset/ocr_results` که main.py نوشته.
     """
 
     labels_folder = DATASET / "labels" / document_type
@@ -148,16 +160,24 @@ def evaluate_range(document_type, first, last):
             continue
 
         label_file = labels_folder / f"{number:03d}.json"
-        ocr_file = ocr_folder / f"{number:03d}.txt"
 
-        if not (label_file.is_file() and ocr_file.is_file()):
+        if not label_file.is_file():
+            continue
+
+        if use_variants:
+            text = variant_text(document_type, number)
+        else:
+            ocr_file = ocr_folder / f"{number:03d}.txt"
+            text = ocr_file.read_text(encoding="utf-8") if ocr_file.is_file() else None
+
+        if text is None:
             continue
 
         images += 1
 
         detail = compare_fields_detailed(
             json.loads(label_file.read_text(encoding="utf-8")),
-            ocr_file.read_text(encoding="utf-8"),
+            text,
         )
 
         for field_name, result in detail.items():
@@ -181,6 +201,50 @@ def evaluate_range(document_type, first, last):
         "cer": cer_sum,
         "fields": fields,
     }
+
+
+def variant_text(document_type, number):
+    """
+    متن همهٔ نسخه‌های چندمقیاسی یک نمونه، پشت سر هم.
+
+    معیارِ «تطابق کامل» زیررشته‌ای است، پس چسباندن متن نسخه‌ها دقیقاً همان
+    چیزی را می‌سنجد که استخراج‌گر پنل در اختیار دارد: مقدار درست کافی است در
+    **یکی** از نسخه‌ها آمده باشد. انتخاب بین نسخه‌ها کار FieldExtractor است و
+    این معیار سقفِ آن انتخاب را نشان می‌دهد.
+    """
+    from hana_engine import ENGINE_ROOT
+    from hana_engine.ocr import ocr_document
+
+    sources = sorted((DATASET / "processed" / document_type).glob(f"{number:03d}_*.png"))
+
+    if not sources:
+        return None
+
+    result = ocr_document(
+        str(sources[0]),
+        document_type=document_type,
+        out_dir=str(ENGINE_ROOT / "dataset" / "benchmark"),
+    )
+
+    pieces = []
+
+    for variant in result["variants"]:
+
+        pieces.append(variant["raw_text"])
+
+        # همان کاری که app/ocr/ocr_engine.ocr_folder برای کارت خودرو می‌کند:
+        # VIN و پلاک از مسیر ویژه می‌آیند نه از متن صفحه، پس اگر این‌جا
+        # اضافه نشوند معیارِ زیررشته‌ای آن‌ها را «خوانده‌نشده» می‌بیند و دو
+        # حالت اسکریپت با هم قابل مقایسه نمی‌مانند.
+        extra = variant.get("extra") or {}
+
+        if extra.get("vin"):
+            pieces.append(f"VIN : {extra['vin']}")
+
+        if extra.get("plate"):
+            pieces.append(f"PLATE : {extra['plate']}")
+
+    return "\n".join(pieces)
 
 
 def percent(part, whole):
@@ -284,6 +348,12 @@ def parse_args():
         help="شمارهٔ پایان بازه",
     )
 
+    parser.add_argument(
+        "--variants",
+        action="store_true",
+        help="متن را از مسیر چندمقیاسی موتور بگیر (همان راهی که پنل می‌رود)",
+    )
+
     return parser.parse_args()
 
 
@@ -327,8 +397,20 @@ def main():
 
     process_pending()
 
+    if args.variants:
+        print("مسیر چندمقیاسی موتور — کندتر، ولی همان راهی که پنل می‌رود.")
+        print(
+            "توجه: این عدد «سقف» است، نه نتیجهٔ نهایی — معیار زیررشته‌ای فقط"
+            " می‌پرسد مقدار درست در یکی از نسخه‌ها آمده یا نه. اینکه استخراج‌گر"
+            " واقعاً کدام را برمی‌دارد را با"
+            " «php artisan hana:evaluate-extraction --last=25 --variants» ببینید."
+        )
+
     print_report(
-        [evaluate_range(document_type, first, last) for document_type in DOCUMENT_TYPES],
+        [
+            evaluate_range(document_type, first, last, args.variants)
+            for document_type in DOCUMENT_TYPES
+        ],
         first,
         last,
     )

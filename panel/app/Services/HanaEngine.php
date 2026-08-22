@@ -203,6 +203,12 @@ class HanaEngine
     /**
      * اجرای OCR روی یک تصویر مدرک.
      *
+     * موتور مدرک را در چند بزرگ‌نمایی نسبت به عرض قالب مرجعش می‌خواند و
+     * همهٔ متن‌ها را در کلید `variants` برمی‌گرداند؛ `raw_text` همان نسخهٔ
+     * اول (مقیاس ۱.۰) است. انتخاب مقدار هر فیلد از میان نسخه‌ها کار
+     * FieldExtractor است، نه موتور.
+     *
+     * @param  list<float>|null  $scales  بازنویسی بزرگ‌نمایی‌های پیش‌فرض موتور
      * @return array<string, mixed>
      */
     public function ocrDocument(
@@ -210,12 +216,14 @@ class HanaEngine
         ?string $documentType = null,
         bool $preprocess = true,
         ?string $outDir = null,
+        ?array $scales = null,
     ): array {
         return $this->call('ocr_document', [
             'path' => $path,
             'document_type' => $documentType,
             'preprocess' => $preprocess,
             'out_dir' => $outDir,
+            'scales' => $scales,
         ]);
     }
 

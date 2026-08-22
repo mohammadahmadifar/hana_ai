@@ -91,10 +91,9 @@ final class FieldExtractor
             return 0;
         }
 
-        $fields = $this->fieldsFromText(
+        $fields = $this->fieldsFromVariants(
             $type,
-            (string) $run->raw_text,
-            is_array($run->extra) ? $run->extra : [],
+            self::variantsOf($run),
         );
 
         $touched = [];
@@ -155,6 +154,129 @@ final class FieldExtractor
         }
 
         return $written;
+    }
+
+    /**
+     * نسخه‌های متن یک اجرای OCR — همیشه دست‌کم یکی.
+     *
+     * موتور از تسک ۶۶۲ همان مدرک را در چند بزرگ‌نمایی می‌خواند و متن‌ها را در
+     * `extra.variants` می‌گذارد. اجراهای قدیمی این کلید را ندارند، پس
+     * `raw_text` تنها نسخه می‌شود و رفتار دقیقاً مثل قبل می‌ماند.
+     *
+     * نسخهٔ اول همیشه اولِ فهرست است تا رأی مساوی به نفع مقیاس مرجع بشکند.
+     *
+     * @return list<array{raw_text: string, extra: array<string, mixed>}>
+     */
+    public static function variantsOf(OcrRun $run): array
+    {
+        $extra = is_array($run->extra) ? $run->extra : [];
+        $variants = is_array($extra['variants'] ?? null) ? $extra['variants'] : [];
+
+        // کلید variants خودش داخل هر نسخه معنا ندارد
+        unset($extra['variants']);
+
+        $out = [];
+        $seen = [];
+
+        foreach (array_merge([['raw_text' => (string) $run->raw_text] + $extra], $variants) as $variant) {
+            if (! is_array($variant)) {
+                continue;
+            }
+
+            $rawText = (string) ($variant['raw_text'] ?? '');
+
+            // موتور نسخه‌ها را تخت می‌دهد (`vin`) و DocumentOcr هم تخت ذخیره
+            // می‌کند، ولی هر مسیری که خروجی خام موتور را مستقیم بدهد شکل
+            // تودرتو دارد (`extra.vin`). هر دو را می‌فهمیم تا VIN بی‌صدا گم نشود.
+            $nested = is_array($variant['extra'] ?? null) ? $variant['extra'] : [];
+
+            $extraOf = [
+                'vin' => $variant['vin'] ?? $nested['vin'] ?? null,
+                'plate' => $variant['plate'] ?? $nested['plate'] ?? null,
+            ];
+
+            // متن خالی به‌تنهایی دلیل دور انداختن نسخه نیست: مسیر ویژهٔ کارت
+            // خودرو VIN و پلاک را از برشِ خودش می‌خواند، نه از متن صفحه. اگر
+            // این‌جا رد می‌شد، مدرکی که صفحه‌اش خوانده نشده ولی شاسی‌اش خوانده
+            // شده، شاسی‌اش را هم از دست می‌داد.
+            if (trim($rawText) === '' && $extraOf['vin'] === null && $extraOf['plate'] === null) {
+                continue;
+            }
+
+            // موتور نسخهٔ اول را هم داخل variants می‌گذارد و هم در raw_text؛
+            // دوباره خواندنش فقط وقت می‌برد. کلید یکتایی، vin و پلاک را هم
+            // در بر می‌گیرد چون آن‌ها از برشِ جدا می‌آیند و می‌توانند بین دو
+            // بزرگ‌نمایی فرق کنند حتی وقتی متن صفحه مو‌به‌مو یکی است.
+            $key = md5($rawText.'|'.($extraOf['vin'] ?? '').'|'.($extraOf['plate'] ?? ''));
+
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+
+            $out[] = ['raw_text' => $rawText, 'extra' => $extraOf];
+        }
+
+        return $out === [] ? [['raw_text' => '', 'extra' => []]] : $out;
+    }
+
+    /**
+     * همان `fieldsFromText`، ولی روی چند نسخه از متن همان مدرک.
+     *
+     * ### چرا انتخاب فیلدبه‌فیلد است، نه انتخاب «بهترین متن»
+     * هیچ بزرگ‌نمایی‌ای برای همهٔ فیلدها بهترین نیست. روی همان کارت ملیِ
+     * پروندهٔ ۲۷۲، مقیاس ۱.۰ کد ملی را درست می‌خواند و تاریخ تولد را غلط،
+     * و مقیاس ۱.۲۵ برعکس. پس اگر یک متن را «برنده» اعلام کنیم، به‌ازای هر
+     * فیلدی که می‌بریم یکی را می‌بازیم. اندازه‌گیری روی ۷۵ نمونه: اجتماع
+     * سه مقیاس تطابق کامل را از ۷۴.۸٪ به ۸۳.۵٪ می‌برد.
+     *
+     * ### داورِ انتخاب همان اطمینان است
+     * `fieldsFromText` برای هر فیلد عددی می‌دهد که نیمی‌اش «مقدار از کجا آمد»
+     * است و نیمی‌اش «چقدر درست‌شکل است» (رقم کنترل کد ملی، تقویم شمسی معتبر،
+     * طول محتمل، الگوی پلاک). دقیقاً همین نیمهٔ دوم است که مقدار درست را از
+     * مقدارِ خوش‌ظاهرِ غلط جدا می‌کند، پس بیشینهٔ اطمینان داور درستی است.
+     * تساوی به نفع نسخهٔ اول (مقیاس مرجع) شکسته می‌شود.
+     *
+     * @param  list<array{raw_text: string, extra?: array<string, mixed>}>  $variants
+     * @return array<string, array{raw: ?string, normalized: ?string, confidence: float}>
+     */
+    public function fieldsFromVariants(DocumentType $type, array $variants): array
+    {
+        $best = [];
+
+        foreach ($variants as $variant) {
+            $fields = $this->fieldsFromText(
+                $type,
+                (string) ($variant['raw_text'] ?? ''),
+                is_array($variant['extra'] ?? null) ? $variant['extra'] : [],
+            );
+
+            foreach ($fields as $key => $field) {
+                $found = $field['normalized'] !== null && $field['normalized'] !== '';
+
+                // فیلدی که هیچ نسخه‌ای پیدایش نکرده هم باید در خروجی باشد
+                // (با مقدار null)، وگرنه قرارداد fieldsFromText می‌شکند.
+                if (! isset($best[$key])) {
+                    $best[$key] = $field;
+
+                    continue;
+                }
+
+                $current = $best[$key];
+                $currentFound = $current['normalized'] !== null && $current['normalized'] !== '';
+
+                if (! $found) {
+                    continue;
+                }
+
+                if (! $currentFound || $field['confidence'] > $current['confidence']) {
+                    $best[$key] = $field;
+                }
+            }
+        }
+
+        return $best;
     }
 
     /**
