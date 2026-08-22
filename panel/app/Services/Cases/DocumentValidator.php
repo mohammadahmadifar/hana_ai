@@ -102,6 +102,9 @@ final class DocumentValidator
         $case->load([
             'serviceType.documentTypes.fields',
             'documents.documentType.fields',
+            // برای تفکیک «نخواندیم» از «نداریم» لازم است: مقدار خامی که مسیر
+            // ویژهٔ کارت خودرو خوانده در extra همین اجرا می‌ماند.
+            'documents.latestOcrRun',
             'extractedFields',
         ]);
 
@@ -314,15 +317,47 @@ final class DocumentValidator
         // نه نقص واقعی مدارک — پس «مشکوک»، نه «رد قطعی».
         $reliable = $document->isReliable($limits['min_confidence']);
 
+        // و همین‌طور وقتی موتور برای **همهٔ** فیلدهای جامانده چیزی خوانده ولی
+        // شکلش معتبر نبوده: مدرک ناقص نیست، ما نتوانستیم بخوانیمش. «رد قطعی»
+        // این حالت را با «مدرک را نیاورده‌ای» یکی می‌کند، که نه درست است نه
+        // به متقاضی می‌گوید چه کار کند.
+        $unreadable = $document->unreadable();
+        $allUnreadable = $missing !== [];
+
+        // array_all() فقط روی PHP 8.4 هست و composer.json این پروژه ^8.3 اعلام
+        // می‌کند؛ روی میزبان 8.3 کل مرحلهٔ اعتبارسنجی با «تابع تعریف‌نشده» می‌مرد.
+        foreach ($missing as $field) {
+            if (! isset($unreadable[$field->key])) {
+                $allUnreadable = false;
+
+                break;
+            }
+        }
+
         $message = $this->num(count($missing)).' فیلد اجباری «'.$document->label().'» خالی است: '
             .implode('، ', $labels).'.';
 
-        if (! $reliable) {
+        if ($allUnreadable) {
+            $details['unreadable'] = $unreadable;
+
+            // ستون message_fa ۲۵۵ نویسه است و row() مازاد را می‌بُرد؛ متن بلندتر
+            // یعنی همان جملهٔ «چه کار کن» — تنها بخش به‌درد‌بخورِ پیام — از ته
+            // بریده می‌شود. پس عمداً کوتاه است.
+            $message .= ' موتور چیزی خواند ولی شکل معتبری نداشت؛ مدرک ناقص نیست.'
+                .' تصویر واضح‌تر بفرستید یا کارشناس دستی وارد کند.';
+        } elseif (! $reliable) {
             $message .= ' اطمینان خواندن این مدرک پایین است ('
                 .$this->percent($document->averageConfidence()).')؛ ممکن است مشکل از کیفیت تصویر باشد.';
         }
 
-        return $this->row('document', $ruleKey, $reliable ? 'failed' : 'warning', $message, $details, $document);
+        return $this->row(
+            'document',
+            $ruleKey,
+            $reliable && ! $allUnreadable ? 'failed' : 'warning',
+            $message,
+            $details,
+            $document,
+        );
     }
 
     /**

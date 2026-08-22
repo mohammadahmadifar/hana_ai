@@ -182,6 +182,9 @@ class ReferenceDataSeeder extends Seeder
                     // دلیل: این تناقض با کیفیت خوبِ بقیهٔ مؤلفه‌ها جبران نمی‌شود و هرچه OCR
                     // مطمئن‌تر باشد، مغایرت واقعی‌تر است. با false فقط امتیاز پایین می‌آید.
                     'cross_fail_rejects' => true,
+                    // فیلد اجباریِ خوانده‌نشده جلوی تایید خودکار را می‌گیرد
+                    // (رد نمی‌کند) — CaseScorer::decide()
+                    'unread_required_holds' => true,
                 ]],
             ],
 

@@ -86,6 +86,7 @@ class SettingsController extends Controller
             'approve_at' => (float) $data['approve_at'],
             'reject_below' => (float) $data['reject_below'],
             'cross_fail_rejects' => $request->boolean('cross_fail_rejects'),
+            'unread_required_holds' => $request->boolean('unread_required_holds'),
         ];
 
         $newPenalties = [
@@ -242,7 +243,7 @@ class SettingsController extends Controller
     /**
      * این آستانه‌ها الان روی چند پروندهٔ امتیازخورده اثر دارند؟
      *
-     * @param  array{approve_at: float, reject_below: float, cross_fail_rejects: bool}  $thresholds
+     * @param  array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool}  $thresholds
      * @return array<string, int>
      */
     private function impact(array $thresholds): array
@@ -253,10 +254,28 @@ class SettingsController extends Controller
         $approve = (clone $scored)->where('confidence_score', '>=', $thresholds['approve_at'])->count();
         $reject = (clone $scored)->where('confidence_score', '<', $thresholds['reject_below'])->count();
 
+        // پروندهٔ بالای آستانه که فیلد اجباریِ بی‌مقدار دارد تایید خودکار نمی‌شود
+        // (CaseScorer::decide). بدون این کسر، همین صفحه — که تنها جای دیدنِ اثرِ
+        // تنظیمات است — تعداد تایید خودکار را بیشتر از واقعیت نشان می‌داد.
+        $held = 0;
+
+        if ($thresholds['unread_required_holds']) {
+            $held = (clone $scored)
+                ->where('confidence_score', '>=', $thresholds['approve_at'])
+                ->whereHas('validationResults', fn ($query) => $query
+                    ->where('scope', 'document')
+                    ->where('rule_key', 'like', 'document.missing_required.%')
+                    ->whereIn('status', ['failed', 'warning']))
+                ->count();
+
+            $approve = max(0, $approve - $held);
+        }
+
         return [
             'total' => $total,
             'approved' => $approve,
             'rejected' => $reject,
+            'held_unread' => $held,
             'needs_review' => max(0, $total - $approve - $reject),
             'cross_failed' => PermitCase::query()
                 ->whereHas('validationResults', fn ($query) => $query
@@ -293,6 +312,7 @@ class SettingsController extends Controller
             'penalties.failed' => 'جریمهٔ هر ایراد جدی',
             'penalties.warning' => 'جریمهٔ هر هشدار',
             'cross_fail_rejects' => 'رد خودکار پروندهٔ ناهمخوان',
+            'unread_required_holds' => 'نگه‌داشتن پروندهٔ دارای فیلد اجباریِ خوانده‌نشده',
         ];
     }
 }

@@ -8,6 +8,7 @@
     $shown = fn (string $key, $fallback) => old($key, $fallback);
 
     $crossVeto = (bool) old('cross_fail_rejects', $thresholds['cross_fail_rejects']);
+    $unreadHold = (bool) old('unread_required_holds', $thresholds['unread_required_holds'] ?? true);
     $approveNow = (float) $shown('approve_at', $thresholds['approve_at']);
     $rejectNow = (float) $shown('reject_below', $thresholds['reject_below']);
 @endphp
@@ -206,6 +207,25 @@
                     </span>
                 </div>
 
+                <div class="field">
+                    <span class="label">فیلد اجباریِ خوانده‌نشده</span>
+                    <input type="hidden" name="unread_required_holds" value="0">
+                    <label class="check">
+                        <input type="checkbox" name="unread_required_holds" value="1" @checked($unreadHold)>
+                        <span>پرونده‌ای که یک فیلد اجباری‌اش خوانده نشده، حتی با امتیاز بالا خودکار تایید نشود</span>
+                    </label>
+                    <span class="hint">
+                        وقتی موتور مقداری را خوانده ولی شکلش معتبر نبوده (نمونهٔ روشنش شمارهٔ پلاک)، ایرادش
+                        «مشکوک» است نه «رد قطعی» — چون مدرکِ متقاضی ناقص نیست، ما نتوانستیم بخوانیمش. همان
+                        تخفیف بدون این تیک پرونده را از بررسی انسانی به تایید خودکار می‌بَرد، یعنی صدور مجوز
+                        با فیلدی که هیچ‌کس ندیده است. با این تیک پرونده فقط به کارشناس می‌رود؛ هرگز رد نمی‌شود.
+                        @if (($impact['held_unread'] ?? 0) > 0)
+                            <strong>هم‌اکنون <x-num :value="$impact['held_unread']" /> پرونده با امتیاز بالای
+                            آستانه به همین دلیل نگه داشته شده‌اند.</strong>
+                        @endif
+                    </span>
+                </div>
+
             </div>
             <div class="card__foot">
                 <div class="row row--end">
@@ -255,7 +275,8 @@
                             <td class="small">
                                 تایید از <x-num :value="$thresholds['approve_at']" /> به بالا،
                                 رد زیر <x-num :value="$thresholds['reject_below'] " />،
-                                رد خودکار ناهمخوانی: {{ $thresholds['cross_fail_rejects'] ? 'فعال' : 'غیرفعال' }}
+                                رد خودکار ناهمخوانی: {{ $thresholds['cross_fail_rejects'] ? 'فعال' : 'غیرفعال' }}،
+                                نگه‌داشتن فیلد اجباریِ خوانده‌نشده: {{ ($thresholds['unread_required_holds'] ?? true) ? 'فعال' : 'غیرفعال' }}
                             </td>
                             <td>{{ $thresholdsMeta['user'] ?? '— (مقدار اولیهٔ سامانه)' }}</td>
                             <td><x-jdate :value="$thresholdsMeta['at']" time /></td>

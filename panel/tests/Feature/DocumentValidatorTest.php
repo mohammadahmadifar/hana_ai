@@ -657,6 +657,87 @@ class DocumentValidatorTest extends TestCase
      *
      * خروجی: شناسهٔ case_documents همان مدرک.
      */
+    // ------------------------------------------------------------------
+    // «نخواندیم» در برابر «نداری» — تسک ۶۶۶
+    // ------------------------------------------------------------------
+
+    /**
+     * پلاکی که موتور خواند ولی شکلش معتبر نبود، «مشکوک» است نه «رد قطعی».
+     *
+     * مدرکِ متقاضی ناقص نیست؛ ما نتوانستیم بخوانیمش. جریمهٔ ۲۵ امتیازیِ
+     * «رد قطعی» همان وزنِ «مدرک را نیاورده‌ای» است و این دو یکی نیستند.
+     */
+    public function test_a_field_the_engine_read_but_could_not_validate_is_a_warning(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->extract($case, $this->data(omit: ['vehicle_card' => ['plate_number']]));
+
+        $documentId = $this->documentIdOf($case, 'vehicle_card');
+
+        // همان ردپایی که مسیر ویژهٔ کارت خودرو از خودش جا می‌گذارد
+        CaseDocument::find($documentId)->ocrRuns()->create([
+            'status' => 'done',
+            'raw_text' => 'متن کارت',
+            'extra' => ['vin' => null, 'plate' => '۶۹ ۴۹۹۹۰۱۶۹۲۴ ۸۹۰ ایران ۱۰'],
+        ]);
+
+        app(DocumentValidator::class)->validate($case);
+
+        $row = $this->ruleRow($case, 'document.missing_required.vehicle_card');
+
+        $this->assertNotNull($row);
+        $this->assertSame('warning', $row->status);
+        $this->assertStringContainsString('شکل معتبری نداشت', $row->message_fa);
+        $this->assertSame(
+            '۶۹ ۴۹۹۹۰۱۶۹۲۴ ۸۹۰ ایران ۱۰',
+            $row->details['unreadable']['plate_number'] ?? null,
+        );
+    }
+
+    /** بدون ردپای موتور، همان «رد قطعی» قبلی سر جایش می‌ماند. */
+    public function test_a_field_with_no_engine_attempt_is_still_a_failure(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->extract($case, $this->data(omit: ['vehicle_card' => ['plate_number']]));
+
+        app(DocumentValidator::class)->validate($case);
+
+        $row = $this->ruleRow($case, 'document.missing_required.vehicle_card');
+
+        $this->assertSame('failed', $row->status);
+        $this->assertStringNotContainsString('شکل معتبری نداشت', $row->message_fa);
+    }
+
+    /**
+     * اگر یکی از فیلدهای جامانده واقعاً غایب باشد، تخفیف داده نمی‌شود.
+     *
+     * تخفیف فقط وقتی معنا دارد که **همهٔ** جاماندگی‌ها از ناخوانایی باشند؛
+     * وگرنه یک پلاکِ ناخوانا می‌توانست یک شماره شاسیِ واقعاً غایب را هم پشت
+     * خودش پنهان کند.
+     */
+    public function test_one_genuinely_absent_field_keeps_the_failure(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->extract($case, $this->data(omit: ['vehicle_card' => ['plate_number', 'national_id']]));
+
+        $documentId = $this->documentIdOf($case, 'vehicle_card');
+
+        CaseDocument::find($documentId)->ocrRuns()->create([
+            'status' => 'done',
+            'raw_text' => 'متن کارت',
+            'extra' => ['vin' => null, 'plate' => '۶۹ ۴۹۹۹۰۱۶۹۲۴ ۸۹۰ ایران ۱۰'],
+        ]);
+
+        app(DocumentValidator::class)->validate($case);
+
+        $this->assertSame('failed', $this->ruleRow($case, 'document.missing_required.vehicle_card')->status);
+    }
+
+    // ------------------------------------------------------------------
+
     private function addLongKeyDocument(PermitCase $case, string $key): int
     {
         $type = DocumentType::create([

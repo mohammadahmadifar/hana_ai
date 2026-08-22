@@ -352,6 +352,98 @@ class CaseScorerTest extends TestCase
 
     // ——— ابزار داخلی تست ———
 
+    // ------------------------------------------------------------------
+    // فیلد اجباریِ خوانده‌نشده جلوی تایید خودکار را می‌گیرد — تسک ۶۶۶
+    // ------------------------------------------------------------------
+
+    /**
+     * امتیاز بالا هم مجوز نمی‌دهد وقتی یک فیلد اجباری اصلاً خوانده نشده.
+     *
+     * از تسک ۶۶۶ ایرادِ چنین فیلدی «مشکوک» است نه «رد قطعی» (منصفانه است:
+     * مدرک ناقص نیست، ما نخواندیمش). ولی همان تخفیف، بدون این نگهبان،
+     * پرونده را از بررسی انسانی به تایید خودکار می‌بُرد — یعنی صدور مجوز با
+     * فیلدی که هیچ‌کس ندیده است.
+     */
+    public function test_an_unread_required_field_holds_the_case_back_from_auto_approval(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->fillRequiredFields($case, 98.0);
+
+        $documentId = $case->documents->first()->id;
+
+        $this->addResult(
+            $case,
+            'document.missing_required.vehicle_card',
+            'document',
+            'warning',
+            'یک فیلد اجباری خالی است.',
+            $documentId,
+        );
+
+        ValidationResult::query()
+            ->where('case_id', $case->id)
+            ->where('rule_key', 'document.missing_required.vehicle_card')
+            ->update(['details' => json_encode([
+                'missing' => [['key' => 'plate_number', 'label' => 'شماره پلاک']],
+            ], JSON_UNESCAPED_UNICODE)]);
+
+        $scored = $this->runScorer($case);
+
+        $this->assertGreaterThanOrEqual(80.0, (float) $scored->confidence_score);
+        $this->assertSame('needs_review', $scored->decision);
+        $this->assertStringContainsString('شماره پلاک', (string) $scored->decision_reason);
+        $this->assertStringContainsString('تایید خودکار', (string) $scored->decision_reason);
+    }
+
+    /** مدیر می‌تواند این نگهبان را خاموش کند. */
+    public function test_the_hold_can_be_switched_off_in_settings(): void
+    {
+        Setting::put('scoring.thresholds', array_merge(CaseScorer::DEFAULT_THRESHOLDS, ['unread_required_holds' => false]));
+
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->fillRequiredFields($case, 98.0);
+
+        $this->addResult(
+            $case,
+            'document.missing_required.vehicle_card',
+            'document',
+            'warning',
+            'یک فیلد اجباری خالی است.',
+            $case->documents->first()->id,
+        );
+
+        ValidationResult::query()
+            ->where('case_id', $case->id)
+            ->where('rule_key', 'document.missing_required.vehicle_card')
+            ->update(['details' => json_encode([
+                'missing' => [['key' => 'plate_number', 'label' => 'شماره پلاک']],
+            ], JSON_UNESCAPED_UNICODE)]);
+
+        $this->assertSame('approved', $this->runScorer($case)->decision);
+    }
+
+    /** ردیف «مدرک بارگذاری نشده» فهرست missing ندارد و نگهبان را بیدار نمی‌کند. */
+    public function test_a_skipped_document_row_does_not_trigger_the_hold(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->fillRequiredFields($case, 98.0);
+
+        $this->addResult(
+            $case,
+            'document.missing_required.previous_permit',
+            'document',
+            'skipped',
+            'مدرک هنوز بارگذاری نشده است.',
+        );
+
+        $this->assertSame('approved', $this->runScorer($case)->decision);
+    }
+
+    // ------------------------------------------------------------------
+
     private function runScorer(PermitCase $case): PermitCase
     {
         $fresh = $case->fresh();

@@ -167,6 +167,64 @@ final class DocumentFields
         return $sum / count($this->values);
     }
 
+    /**
+     * فیلدهایی که موتور برایشان چیزی خواند ولی مقدارش شکل معتبری نداشت.
+     *
+     * تفاوتش با «خالی» مهم است و از روی extracted_fields دیده نمی‌شود: هر دو
+     * حالت یک ردیفِ نبوده‌اند. ولی «مدرک را نداریم» و «مدرک هست و ما نتوانستیم
+     * بخوانیمش» دو حرف کاملاً متفاوت به متقاضی می‌زنند و نباید یک وزن بگیرند.
+     *
+     * تنها ردپای موجود از این تفاوت، کلیدهای `extra` اجرای OCR است: مسیر ویژهٔ
+     * کارت خودرو شماره شاسی و پلاک را با برشِ خودش می‌خواند و هرچه خوانده —
+     * حتی اگر آشغال باشد — همان‌جا می‌ماند. اگر آن مقدار آمده باشد ولی
+     * FieldExtractor نتوانسته باشد از آن مقداری معتبر بسازد (رقم کنترل، ۱۷
+     * نویسهٔ VIN، الگوی پلاک)، یعنی «خوانده شد ولی خوانا نبود».
+     *
+     * @return array<string, string> کلید فیلد ← همان چیزی که موتور خوانده بود
+     */
+    public function unreadable(): array
+    {
+        $run = $this->document?->latestOcrRun;
+
+        // اجرای ناموفق یا نیمه‌کاره شاهد نیست: CasePipeline::markStalled فقط
+        // status و error را عوض می‌کند و `extra` اجرای قبلی سر جایش می‌ماند،
+        // پس بدون این شرط یک ردپای بیات می‌توانست تخفیف بگیرد.
+        if ($run === null || $run->status !== 'done' || ! is_array($run->extra)) {
+            return [];
+        }
+
+        $attempted = [];
+
+        foreach (['vin', 'plate'] as $key) {
+            $value = is_string($run->extra[$key] ?? null) ? trim($run->extra[$key]) : '';
+
+            if ($value !== '') {
+                // مقدار خامِ موتور است و طولش تضمینی ندارد؛ در details ذخیره
+                // می‌شود پس همان‌جا کوتاه می‌شود.
+                $attempted[$key] = mb_substr($value, 0, 120);
+            }
+        }
+
+        if ($attempted === []) {
+            return [];
+        }
+
+        $out = [];
+
+        // فقط فیلد **اجباریِ خالی**: فیلد اختیاری (مثل پلاک روی «مجوز قبلی»)
+        // نه در missingRequired() می‌آید نه باید در این فهرست بیاید، وگرنه
+        // payload نامی را نام می‌برد که اصلاً جامانده نبوده.
+        foreach ($this->fields as $key => $field) {
+            $raw = $attempted[$field->value_type] ?? null;
+
+            if ($raw !== null && (bool) $field->is_required && ! isset($this->values[$key])) {
+                $out[$key] = $raw;
+            }
+        }
+
+        return $out;
+    }
+
     /** خواندن این مدرک آن‌قدر خوب بوده که نبودِ یک فیلد را بشود «واقعاً نیست» دانست. */
     public function isReliable(float $minConfidence): bool
     {

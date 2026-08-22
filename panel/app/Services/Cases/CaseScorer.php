@@ -51,11 +51,15 @@ final class CaseScorer
      * cross_fail_rejects: آیا یک بررسیِ ناموفق در scope=cross (ناهمخوانی کد ملی
      * یا نام بین مدارک) به‌تنهایی پرونده را رد کند؟ پیش‌فرض «بله» — دلیلش در
      * توضیح متد decide() آمده. این هم مثل بقیه از تنظیمات قابل تغییر است.
+     *
+     * unread_required_holds: آیا فیلد اجباریِ خوانده‌نشده جلوی **تایید خودکار**
+     * را بگیرد؟ پیش‌فرض «بله». رد نمی‌کند — فقط نگه می‌دارد؛ توضیحش در decide().
      */
     public const DEFAULT_THRESHOLDS = [
         'approve_at' => 80.0,
         'reject_below' => 45.0,
         'cross_fail_rejects' => true,
+        'unread_required_holds' => true,
     ];
 
     /**
@@ -87,9 +91,14 @@ final class CaseScorer
         $case->loadMissing([
             'documents',
             'extractedFields',
-            'validationResults',
             'serviceType.documentTypes.fields',
         ]);
+
+        // load و نه loadMissing: مرحلهٔ قبلِ پایپ‌لاین (DocumentValidator) همین
+        // الان ردیف‌های این پرونده را بازنویسی کرده و رابطهٔ از پیش بارگذاری‌شده
+        // بیات است. هم وتوی ناهمخوانی و هم نگهبان فیلد اجباری روی همین رابطه
+        // تصمیم می‌گیرند، پس خواندن ردیف کهنه یعنی تصمیم غلط.
+        $case->load('validationResults');
 
         $weights = self::weights();
         $thresholds = self::thresholds();
@@ -197,7 +206,7 @@ final class CaseScorer
     /**
      * آستانه‌های تصمیم از تنظیمات.
      *
-     * @return array{approve_at: float, reject_below: float, cross_fail_rejects: bool}
+     * @return array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool}
      */
     public static function thresholds(): array
     {
@@ -219,10 +228,15 @@ final class CaseScorer
             ? filter_var($stored['cross_fail_rejects'], FILTER_VALIDATE_BOOLEAN)
             : (bool) self::DEFAULT_THRESHOLDS['cross_fail_rejects'];
 
+        $unreadHolds = array_key_exists('unread_required_holds', $stored)
+            ? filter_var($stored['unread_required_holds'], FILTER_VALIDATE_BOOLEAN)
+            : (bool) self::DEFAULT_THRESHOLDS['unread_required_holds'];
+
         return [
             'approve_at' => $approve,
             'reject_below' => $reject,
             'cross_fail_rejects' => $crossVeto,
+            'unread_required_holds' => $unreadHolds,
         ];
     }
 
@@ -498,7 +512,23 @@ final class CaseScorer
      * صف بررسی انسانی برود، تیک «رد خودکار» را در تنظیمات برمی‌دارد و آن‌وقت
      * ناهمخوانی فقط از راه مؤلفهٔ اعتبارسنجی امتیاز را پایین می‌آورد.
      *
-     * @param  array{approve_at: float, reject_below: float, cross_fail_rejects: bool}  $thresholds
+     * ── چرا «فیلد اجباریِ خوانده‌نشده» جلوی تایید خودکار را می‌گیرد ──────────
+     *
+     * از تسک ۶۶۶، وقتی موتور برای یک فیلد اجباری چیزی خوانده ولی شکلش معتبر
+     * نبوده (نمونهٔ روشنش پلاک خودرو)، ایرادش «مشکوک» است نه «رد قطعی» — چون
+     * مدرکِ متقاضی ناقص نیست، ما نتوانستیم بخوانیمش و جریمه‌کردن او بابت
+     * محدودیت OCR ما بی‌انصافی است.
+     *
+     * ولی همان تخفیف، به‌تنهایی، پرونده را از «بررسی انسانی» به «تایید خودکار»
+     * می‌بُرد: پروندهٔ ۲۷۲ با همین یک تغییر ۷۹.۵ → ۸۶.۳ شد و خودکار تایید
+     * می‌شد، در حالی که شمارهٔ پلاکش را هیچ‌کس — نه سامانه نه انسان — ندیده بود.
+     * صدور مجوز با یک فیلد اجباریِ ندیده، بدتر از هر دو حالت قبلی است.
+     *
+     * پس تخفیف در **امتیاز** می‌ماند و **تصمیم** نگه داشته می‌شود: پرونده به
+     * کارشناس می‌رود تا مقدار را از روی تصویر بخواند و دستی وارد کند. هرگز رد
+     * نمی‌شود. مدیر می‌تواند در «تنظیمات امتیازدهی» خاموشش کند.
+     *
+     * @param  array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool}  $thresholds
      * @param  list<array<string, mixed>>  $rows
      * @return array{0: string, 1: string}
      */
@@ -522,6 +552,19 @@ final class CaseScorer
         }
 
         if ($score >= $thresholds['approve_at']) {
+            $unread = $thresholds['unread_required_holds'] ? $this->unreadRequired($case) : [];
+
+            if ($unread !== []) {
+                return ['needs_review',
+                    $scoreText.' به دست آمد که از آستانهٔ تایید ('.$approveText.') کمتر نیست، ولی '
+                    .self::fa(count($unread)).' فیلد اجباری مقداری ندارد ('
+                    .implode('، ', array_slice($unread, 0, 3)).') — چه اصلاً روی مدرک نبوده و چه '
+                    .'موتور نتوانسته بخواندش. تایید خودکار با فیلد اجباریِ ندیده انجام نمی‌شود؛ '
+                    .'کارشناس مقدار را از روی تصویر وارد کند و بعد تصمیم بگیرد. '
+                    .'(این رفتار در «تنظیمات امتیازدهی» قابل تغییر است.)',
+                ];
+            }
+
             return ['approved',
                 $scoreText.' به دست آمد که از آستانهٔ تایید ('.$approveText.') کمتر نیست، پس '
                 .'پرونده تایید شد. '.$this->driverText($rows),
@@ -540,6 +583,44 @@ final class CaseScorer
             .') است، پس تصمیم به کارشناس واگذار شد و ممکن است مدارک بیشتری لازم باشد. '
             .$this->driverText($rows),
         ];
+    }
+
+    /**
+     * برچسب فیلدهای اجباری‌ای که هیچ مقداری برایشان ثبت نشده.
+     *
+     * منبع همان ردیف‌های `document.missing_required.*` است که DocumentValidator
+     * نوشته، پس این‌جا نه کوئری تازه‌ای زده می‌شود نه قاعده‌ای دوباره پیاده.
+     * ردیف `skipped` (مدرکِ بارگذاری‌نشده) فهرست `missing` ندارد و وارد نمی‌شود؛
+     * نبودِ کل مدرک از راه مؤلفهٔ «کامل بودن مدارک» امتیاز را پایین می‌آورد.
+     *
+     * @return list<string>
+     */
+    private function unreadRequired(PermitCase $case): array
+    {
+        $labels = [];
+
+        foreach ($case->validationResults as $row) {
+            if ($row->scope !== 'document' || ! str_starts_with((string) $row->rule_key, 'document.missing_required.')) {
+                continue;
+            }
+
+            if (! in_array($row->status, ['failed', 'warning'], true)) {
+                continue;
+            }
+
+            $details = is_array($row->details) ? $row->details : [];
+            $missing = is_array($details['missing'] ?? null) ? $details['missing'] : [];
+
+            foreach ($missing as $field) {
+                $label = is_array($field) ? (string) ($field['label'] ?? $field['key'] ?? '') : (string) $field;
+
+                if ($label !== '') {
+                    $labels[] = '«'.$label.'»';
+                }
+            }
+        }
+
+        return array_values(array_unique($labels));
     }
 
     /**
