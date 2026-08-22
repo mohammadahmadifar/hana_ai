@@ -254,9 +254,15 @@ class SettingsController extends Controller
         $approve = (clone $scored)->where('confidence_score', '>=', $thresholds['approve_at'])->count();
         $reject = (clone $scored)->where('confidence_score', '<', $thresholds['reject_below'])->count();
 
-        // پروندهٔ بالای آستانه که فیلد اجباریِ بی‌مقدار دارد تایید خودکار نمی‌شود
-        // (CaseScorer::decide). بدون این کسر، همین صفحه — که تنها جای دیدنِ اثرِ
-        // تنظیمات است — تعداد تایید خودکار را بیشتر از واقعیت نشان می‌داد.
+        // پروندهٔ بالای آستانه که دادهٔ اجباریِ دیده‌نشده دارد تایید خودکار
+        // نمی‌شود (CaseScorer::decide). بدون این کسر، همین صفحه — که تنها جای
+        // دیدنِ اثرِ تنظیمات است — تعداد تایید خودکار را بیشتر از واقعیت نشان
+        // می‌داد.
+        //
+        // عدد **تقریبی** است و متن صفحه هم «حدود» می‌گوید: این کوئری شرطِ
+        // «آیا خدمتِ این پرونده آن مدرک را اجباری کرده؟» را ندارد، چون آن
+        // شرط روی پیوت است و آوردنش به SQL این پرس‌وجوی نمایشی را چند برابر
+        // گران می‌کند. تصمیم واقعی همیشه با CaseScorer است، نه با این عدد.
         $held = 0;
 
         if ($thresholds['unread_required_holds']) {
@@ -265,7 +271,10 @@ class SettingsController extends Controller
                 ->whereHas('validationResults', fn ($query) => $query
                     ->where('scope', 'document')
                     ->where('rule_key', 'like', 'document.missing_required.%')
-                    ->whereIn('status', ['failed', 'warning']))
+                    // skipped هم هست: یعنی مدرک اجباری اصلاً نیامده — همان
+                    // حالتی که جریمهٔ اعتبارسنجی نمی‌گیرد و بدون نگهبان
+                    // خودکار تایید می‌شد.
+                    ->whereIn('status', ['failed', 'warning', 'skipped']))
                 ->count();
 
             $approve = max(0, $approve - $held);

@@ -557,10 +557,9 @@ final class CaseScorer
             if ($unread !== []) {
                 return ['needs_review',
                     $scoreText.' به دست آمد که از آستانهٔ تایید ('.$approveText.') کمتر نیست، ولی '
-                    .self::fa(count($unread)).' فیلد اجباری مقداری ندارد ('
-                    .implode('، ', array_slice($unread, 0, 3)).') — چه اصلاً روی مدرک نبوده و چه '
-                    .'موتور نتوانسته بخواندش. تایید خودکار با فیلد اجباریِ ندیده انجام نمی‌شود؛ '
-                    .'کارشناس مقدار را از روی تصویر وارد کند و بعد تصمیم بگیرد. '
+                    .self::fa(count($unread)).' مورد از دادهٔ اجباری این پرونده دیده نشده است: '
+                    .implode('، ', array_slice($unread, 0, 3)).'. تایید خودکار روی دادهٔ ندیده '
+                    .'انجام نمی‌شود؛ کارشناس آن را تکمیل کند و بعد تصمیم بگیرد. '
                     .'(این رفتار در «تنظیمات امتیازدهی» قابل تغییر است.)',
                 ];
             }
@@ -586,21 +585,62 @@ final class CaseScorer
     }
 
     /**
-     * برچسب فیلدهای اجباری‌ای که هیچ مقداری برایشان ثبت نشده.
+     * چیزهایی که برای تصمیم لازم بوده و هیچ‌کس ندیده‌شان.
      *
-     * منبع همان ردیف‌های `document.missing_required.*` است که DocumentValidator
-     * نوشته، پس این‌جا نه کوئری تازه‌ای زده می‌شود نه قاعده‌ای دوباره پیاده.
-     * ردیف `skipped` (مدرکِ بارگذاری‌نشده) فهرست `missing` ندارد و وارد نمی‌شود؛
-     * نبودِ کل مدرک از راه مؤلفهٔ «کامل بودن مدارک» امتیاز را پایین می‌آورد.
+     * سه حالت، همه از ردیف‌های `document.missing_required.*` که DocumentValidator
+     * نوشته — پس نه کوئری تازه‌ای زده می‌شود نه قاعده‌ای دوباره پیاده:
+     *
+     *   failed/warning        → فیلدهای اجباریِ بی‌مقدارِ یک مدرکِ بارگذاری‌شده
+     *   skipped + uploaded=false → مدرک اجباری‌ای که اصلاً نیامده
+     *   skipped + بارگذاری‌شده   → مدرکی که آمده ولی هیچ فیلدی از آن درنیامد
+     *
+     * حالت دوم بی‌سروصدا مهم‌ترین بود: `skipped` جریمهٔ اعتبارسنجی نمی‌گیرد
+     * (CaseScorer فقط failed و warning را می‌شمارد)، پس مؤلفهٔ اعتبارسنجی
+     * دست‌نخورده ۱۰۰ می‌ماند و تنها ترمزْ مؤلفهٔ «کامل بودن مدارک» است.
+     * اندازه‌گیری‌شده: پروندهٔ سالمِ سه‌مدرکی که کارت خودرویش اصلاً نیامده
+     * ۹۱.۷ می‌گرفت و **خودکار تایید** می‌شد — مجوز حمل‌ونقل بدون کارت مالکیت.
+     *
+     * ### دو نکته که با عدد و بازبینی روشن شدند
+     * نوعِ مدرک از `details['document']` خوانده می‌شود نه از تجزیهٔ `rule_key`:
+     * `DocumentValidator::clipRuleKey()` کلیدِ بلندتر از ۶۰ نویسه را با پسوند
+     * sha1 می‌بُرد، و آن‌وقت تجزیه هیچ‌وقت جور درنمی‌آمد — یعنی نگهبان دقیقاً
+     * در حالتی که باید بگیرد، بی‌صدا باز می‌شد.
+     *
+     * و اجباری‌بودن از پیوت خدمت می‌آید، برای **هر سه** حالت: مدرکی که این
+     * خدمت لازمش ندارد (ولی متقاضی فرستاده) نباید پرونده را نگه دارد.
      *
      * @return list<string>
      */
     private function unreadRequired(PermitCase $case): array
     {
+        // خدمتی که نمی‌دانیم چه مدارکی می‌خواهد یعنی نمی‌توانیم بگوییم پرونده
+        // کامل است. با وزن‌های پیش‌فرض، چنین پرونده‌ای مؤلفهٔ «کامل بودن» صفر
+        // می‌گیرد و باز هم دقیقاً روی آستانهٔ ۸۰ می‌نشیند و تایید می‌شود.
+        if ($case->serviceType === null) {
+            return ['فهرست مدارک لازم این پرونده مشخص نیست'];
+        }
+
         $labels = [];
+        $requiredTypes = $this->requiredDocumentKeys($case);
 
         foreach ($case->validationResults as $row) {
-            if ($row->scope !== 'document' || ! str_starts_with((string) $row->rule_key, 'document.missing_required.')) {
+            if ($row->scope !== 'document'
+                || ! str_starts_with((string) $row->rule_key, 'document.missing_required.')) {
+                continue;
+            }
+
+            $details = is_array($row->details) ? $row->details : [];
+            $documentKey = (string) ($details['document'] ?? '');
+
+            if (! isset($requiredTypes[$documentKey])) {
+                continue;
+            }
+
+            if ($row->status === 'skipped') {
+                $labels[] = ($details['uploaded'] ?? null) === false
+                    ? 'مدرک «'.$requiredTypes[$documentKey].'» که بارگذاری نشده'
+                    : 'مدرک «'.$requiredTypes[$documentKey].'» که هیچ فیلدی از آن خوانده نشد';
+
                 continue;
             }
 
@@ -608,7 +648,6 @@ final class CaseScorer
                 continue;
             }
 
-            $details = is_array($row->details) ? $row->details : [];
             $missing = is_array($details['missing'] ?? null) ? $details['missing'] : [];
 
             foreach ($missing as $field) {
@@ -621,6 +660,24 @@ final class CaseScorer
         }
 
         return array_values(array_unique($labels));
+    }
+
+    /**
+     * کلید ← برچسب مدارکی که خدمتِ این پرونده اجباری‌شان کرده.
+     *
+     * @return array<string, string>
+     */
+    private function requiredDocumentKeys(PermitCase $case): array
+    {
+        $out = [];
+
+        foreach ($case->serviceType?->documentTypes ?? [] as $type) {
+            if ((bool) ($type->pivot->is_required ?? true)) {
+                $out[(string) $type->key] = (string) $type->label_fa;
+            }
+        }
+
+        return $out;
     }
 
     /**

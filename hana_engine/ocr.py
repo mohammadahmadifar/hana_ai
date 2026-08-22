@@ -210,13 +210,32 @@ def _prepare_variant(image, target_width, preprocess, target_dir, basename, sour
 
     output = target_dir / f"{basename}.png"
 
-    if not cv2.imwrite(str(output), prepared):
-        raise EngineError(
-            "نوشتن تصویر پیش‌پردازش‌شده ناموفق بود.",
-            f"output={output}",
-        )
+    if not _write(output, prepared):
+        # نام‌ها قطعی‌اند تا اجرای دوباره فایل تازه تلنبار نکند، ولی همان
+        # قطعی‌بودن یک تله دارد: اگر فایلِ هم‌نام را کاربر دیگری ساخته باشد
+        # (مثلاً یک اجرای artisan با root در پوشه‌ای که مالکش www-data است)،
+        # کارگر صف دیگر نمی‌تواند رویش بنویسد و کل OCR مدرک می‌ترکد. یک نام
+        # یکتا برای همان نسخه، هم مدرک را نجات می‌دهد هم رشد فایل را در حالت
+        # عادی صفر نگه می‌دارد.
+        output = target_dir / f"{basename}_{int(time.time() * 1000)}.png"
+
+        if not _write(output, prepared):
+            raise EngineError(
+                "نوشتن تصویر پیش‌پردازش‌شده ناموفق بود.",
+                f"output={output}",
+            )
 
     return prepared, output, True
+
+
+def _write(output, image):
+    """نوشتن امن: خطای مجوز هم False برمی‌گرداند، نه استثنای خام OpenCV."""
+    import cv2
+
+    try:
+        return bool(cv2.imwrite(str(output), image))
+    except Exception:
+        return False
 
 
 def _discard(image_path):

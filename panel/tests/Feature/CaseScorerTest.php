@@ -385,6 +385,10 @@ class CaseScorerTest extends TestCase
             ->where('case_id', $case->id)
             ->where('rule_key', 'document.missing_required.vehicle_card')
             ->update(['details' => json_encode([
+                // همان شکلی که DocumentValidator می‌نویسد؛ نوعِ مدرک از این کلید
+                // خوانده می‌شود نه از تجزیهٔ rule_key.
+                'document' => 'vehicle_card',
+                'label' => 'کارت مالکیت خودرو',
                 'missing' => [['key' => 'plate_number', 'label' => 'شماره پلاک']],
             ], JSON_UNESCAPED_UNICODE)]);
 
@@ -418,15 +422,125 @@ class CaseScorerTest extends TestCase
             ->where('case_id', $case->id)
             ->where('rule_key', 'document.missing_required.vehicle_card')
             ->update(['details' => json_encode([
+                // همان شکلی که DocumentValidator می‌نویسد؛ نوعِ مدرک از این کلید
+                // خوانده می‌شود نه از تجزیهٔ rule_key.
+                'document' => 'vehicle_card',
+                'label' => 'کارت مالکیت خودرو',
                 'missing' => [['key' => 'plate_number', 'label' => 'شماره پلاک']],
             ], JSON_UNESCAPED_UNICODE)]);
 
         $this->assertSame('approved', $this->runScorer($case)->decision);
     }
 
-    /** ردیف «مدرک بارگذاری نشده» فهرست missing ندارد و نگهبان را بیدار نمی‌کند. */
-    public function test_a_skipped_document_row_does_not_trigger_the_hold(): void
+    /**
+     * مدرک اجباری‌ای که اصلاً نیامده هم جلوی تایید خودکار را می‌گیرد.
+     *
+     * این حالت ردیفش `skipped` است و CaseScorer فقط failed و warning را جریمه
+     * می‌کند، پس مؤلفهٔ اعتبارسنجی دست‌نخورده ۱۰۰ می‌ماند. اندازه‌گیری‌شده:
+     * پروندهٔ سالمِ سه‌مدرکی که کارت خودرویش نیامده ۹۱.۷ می‌گرفت و خودکار
+     * تایید می‌شد — مجوز حمل‌ونقل بدون کارت مالکیت خودرو.
+     */
+    public function test_a_required_document_that_never_arrived_also_holds_the_case(): void
     {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->fillRequiredFields($case, 98.0);
+
+        $this->addResult(
+            $case,
+            'document.missing_required.vehicle_card',
+            'document',
+            'skipped',
+            'مدرک «کارت مالکیت خودرو» هنوز بارگذاری نشده است.',
+        );
+
+        ValidationResult::query()
+            ->where('case_id', $case->id)
+            ->where('rule_key', 'document.missing_required.vehicle_card')
+            ->update(['details' => json_encode([
+                'document' => 'vehicle_card',
+                'label' => 'کارت مالکیت خودرو',
+                'uploaded' => false,
+            ], JSON_UNESCAPED_UNICODE)]);
+
+        $scored = $this->runScorer($case);
+
+        $this->assertGreaterThanOrEqual(80.0, (float) $scored->confidence_score);
+        $this->assertSame('needs_review', $scored->decision);
+        $this->assertStringContainsString('کارت مالکیت خودرو', (string) $scored->decision_reason);
+    }
+
+    /**
+     * مدرکی که آمده ولی هیچ فیلدی از آن درنیامد، پیام خودش را می‌گیرد.
+     *
+     * ردیفش هم `skipped` است ولی `uploaded` ندارد؛ گفتنِ «بارگذاری نشده» به
+     * کارشناسی که فایل جلوی چشمش است، او را دنبال نخود سیاه می‌فرستد.
+     */
+    public function test_an_uploaded_document_with_no_extraction_says_so(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->fillRequiredFields($case, 98.0);
+
+        $this->addResult(
+            $case,
+            'document.missing_required.vehicle_card',
+            'document',
+            'skipped',
+            'هنوز هیچ فیلدی استخراج نشده است.',
+        );
+
+        ValidationResult::query()
+            ->where('case_id', $case->id)
+            ->where('rule_key', 'document.missing_required.vehicle_card')
+            ->update(['details' => json_encode([
+                'document' => 'vehicle_card',
+                'label' => 'کارت مالکیت خودرو',
+            ], JSON_UNESCAPED_UNICODE)]);
+
+        $reason = (string) $this->runScorer($case)->decision_reason;
+
+        $this->assertStringContainsString('هیچ فیلدی از آن خوانده نشد', $reason);
+        $this->assertStringNotContainsString('بارگذاری نشده', $reason);
+    }
+
+    /**
+     * کلیدِ بریده‌شدهٔ rule_key نباید نگهبان را بی‌صدا باز کند.
+     *
+     * DocumentValidator کلید بلندتر از ۶۰ نویسه را با پسوند sha1 می‌بُرد؛ اگر
+     * نوعِ مدرک از تجزیهٔ همان کلید خوانده می‌شد، دقیقاً در حالتی که باید
+     * بگیرد جور درنمی‌آمد و پرونده خودکار تایید می‌شد.
+     */
+    public function test_a_clipped_rule_key_still_holds_the_case(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+
+        $this->fillRequiredFields($case, 98.0);
+
+        $this->addResult(
+            $case,
+            'document.missing_required.vehicle_ca.1a2b3c4d',
+            'document',
+            'skipped',
+            'مدرک «کارت مالکیت خودرو» هنوز بارگذاری نشده است.',
+        );
+
+        ValidationResult::query()
+            ->where('case_id', $case->id)
+            ->where('rule_key', 'document.missing_required.vehicle_ca.1a2b3c4d')
+            ->update(['details' => json_encode([
+                'document' => 'vehicle_card',
+                'label' => 'کارت مالکیت خودرو',
+                'uploaded' => false,
+            ], JSON_UNESCAPED_UNICODE)]);
+
+        $this->assertSame('needs_review', $this->runScorer($case)->decision);
+    }
+
+    /** مدرکی که این خدمت اصلاً لازمش ندارد، نگهبان را بیدار نمی‌کند. */
+    public function test_a_document_this_service_does_not_need_never_holds_the_case(): void
+    {
+        // «صدور مجوز» سه مدرک می‌خواهد؛ «مجوز قبلی» فقط مال تمدید است
         $case = $this->makeCaseWithDocuments('issue');
 
         $this->fillRequiredFields($case, 98.0);
@@ -438,6 +552,15 @@ class CaseScorerTest extends TestCase
             'skipped',
             'مدرک هنوز بارگذاری نشده است.',
         );
+
+        ValidationResult::query()
+            ->where('case_id', $case->id)
+            ->where('rule_key', 'document.missing_required.previous_permit')
+            ->update(['details' => json_encode([
+                'document' => 'previous_permit',
+                'label' => 'مجوز قبلی',
+                'uploaded' => false,
+            ], JSON_UNESCAPED_UNICODE)]);
 
         $this->assertSame('approved', $this->runScorer($case)->decision);
     }
