@@ -18,6 +18,9 @@ dataset/ocr_results/
 # لیبل‌های JSON  (label_generator.py)
 dataset/labels/
 
+# خروجی موقت ابزارهای اندازه‌گیری  (scripts/benchmark.py ، hana:evaluate-extraction)
+dataset/benchmark/
+
 # تصاویر دیباگ سگمنت پلاک  (vehicle_card_ocr.py)
 debug_segments.png
 **/debug_segments.png
