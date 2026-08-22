@@ -228,9 +228,16 @@ class ReferenceDataSeeder extends Seeder
                     'max_bytes' => 12 * 1024 * 1024,
                     'min_width' => 600,
                     'min_height' => 380,
+                    // نسبت عرض تصویر به عرض قالب مرجع. زیر این عدد فقط یک
+                    // راهنمای کیفیت است، نه رد کردن — DocumentPrecheck::checkResolution()
+                    'min_reference_ratio' => 0.75,
                     'min_blur_score' => 60,       // واریانس لاپلاسین؛ کمتر یعنی تار
                     'min_brightness' => 40,
                     'max_brightness' => 225,
+                    // کنتراست (انحراف معیار روشنایی). «بیش از حد روشن» فقط
+                    // وقتی رد می‌شود که کنتراست هم زیر این عدد باشد — وگرنه
+                    // کاغذ سفیدِ سالم هم رد می‌شد. DocumentPrecheck::isBurntOut()
+                    'min_contrast' => 18,
                     'allowed_mimes' => ['image/jpeg', 'image/png', 'image/webp'],
                 ]],
             ],

@@ -11,6 +11,7 @@ use App\Services\Cases\DocumentPrecheck;
 use App\Services\HanaEngine;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Mockery\MockInterface;
 use Tests\Concerns\BuildsCases;
@@ -35,6 +36,10 @@ class DocumentPrecheckTest extends TestCase
 
         $this->fakeDisks();
         $this->seedReferenceData();
+
+        // عرض قالب‌های مرجع یک روز کش می‌شود؛ بدون این، اولین تست مقدارش را
+        // برای بقیه هم تثبیت می‌کند و تست بعدی موتورِ mock خودش را نمی‌بیند.
+        Cache::flush();
     }
 
     // ------------------------------------------------------------------
@@ -189,6 +194,64 @@ class DocumentPrecheckTest extends TestCase
         $this->assertNotSame($this->firstMessage($dark), $this->firstMessage($bright));
     }
 
+    /**
+     * رگرسیون: کارت ملیِ سالمِ خودِ ژنراتور نباید «بیش از حد روشن» رد شود.
+     *
+     * سنجهٔ روشناییِ موتور میانگین کانال V است و برای کاغذ سفید ذاتاً بالاست؛
+     * اندازه‌گیری واقعی روی dataset/generated: کارت ملی ۲۴۰.۵ با کنتراست ۲۷.۴.
+     * با شرط قدیمی هر کارت ملی سالمی رد می‌شد و هیچ پرونده‌ای از گام بارگذاری
+     * جلوتر نمی‌رفت.
+     */
+    public function test_a_white_document_stays_accepted_when_its_contrast_is_healthy(): void
+    {
+        $document = $this->documentWithFile($this->imageBytes('bright', extension: 'jpg'), 'card.jpg');
+
+        $this->engineReturns([
+            'width' => 960, 'height' => 540,
+            'blur_score' => 564.3, 'brightness' => 240.5, 'std' => 27.4,
+        ]);
+
+        $this->assertTrue(
+            $this->precheck()->inspect($document),
+            'مدرکِ روشن ولی پرکنتراست باید قبول شود؛ سفیدیِ کاغذ ایراد نیست.',
+        );
+
+        $this->assertSame([], $this->issueCodes($document->refresh()));
+    }
+
+    /** ولی تصویری که واقعاً سوخته — روشن **و** بی‌کنتراست — همچنان رد می‌شود. */
+    public function test_a_burnt_out_image_is_still_rejected(): void
+    {
+        $document = $this->documentWithFile($this->imageBytes('bright', extension: 'jpg'), 'burnt.jpg');
+
+        $this->engineReturns([
+            'width' => 960, 'height' => 540,
+            'blur_score' => 292.7, 'brightness' => 253.9, 'std' => 13.7,
+        ]);
+
+        $this->assertFalse($this->precheck()->inspect($document));
+        $this->assertSame(['file.too_bright'], $this->issueCodes($document->refresh()));
+        $this->assertStringContainsString('محو', $this->firstMessage($document));
+    }
+
+    /** آستانهٔ کنتراست هم مثل بقیه از تنظیمات می‌آید، نه هاردکد. */
+    public function test_contrast_threshold_comes_from_settings(): void
+    {
+        $limits = Setting::get('precheck.limits');
+        $limits['min_contrast'] = 40;
+        Setting::put('precheck.limits', $limits);
+
+        $document = $this->documentWithFile($this->imageBytes('bright', extension: 'jpg'), 'card.jpg');
+
+        $this->engineReturns([
+            'width' => 960, 'height' => 540,
+            'blur_score' => 564.3, 'brightness' => 240.5, 'std' => 27.4,
+        ]);
+
+        $this->assertFalse($this->precheck()->inspect($document));
+        $this->assertSame(['file.too_bright'], $this->issueCodes($document->refresh()));
+    }
+
     // ------------------------------------------------------------------
     // ابعاد و تنظیمات
     // ------------------------------------------------------------------
@@ -338,6 +401,85 @@ class DocumentPrecheckTest extends TestCase
     // ------------------------------------------------------------------
     // ابزار داخلی تست
     // ------------------------------------------------------------------
+    // راهنمای رزولوشن — تسک ۶۶۴
+    // ------------------------------------------------------------------
+
+    /**
+     * تصویری که پیام‌رسان کوچکش کرده باید راهنما بگیرد، نه جریمه.
+     *
+     * پروندهٔ ۲۷۲ دقیقاً همین بود: تلگرام گواهینامه را به نصف اندازه رساند.
+     * حالا که موتور در چند بزرگ‌نمایی می‌خواند، همان تصویر معمولاً درست
+     * خوانده می‌شود — پس کم‌کردن امتیاز از آن جریمهٔ بی‌دلیل است.
+     */
+    public function test_an_undersized_image_is_flagged_but_costs_no_score(): void
+    {
+        $this->engineReturns(['width' => 700, 'height' => 394, 'blur_score' => 5695.47, 'brightness' => 176.35]);
+
+        $document = $this->documentWithFile($this->imageBytes('sharp', 700, 394, 'jpg'), 'card.jpg');
+
+        $this->assertTrue($this->precheck()->inspect($document), 'مدرک باید قبول بماند');
+
+        $document->refresh();
+
+        $this->assertSame('passed', $document->precheck_status);
+        $this->assertContains('file.below_reference_width', $this->issueCodes($document));
+
+        $issue = collect((array) $document->precheck_issues)
+            ->firstWhere('code', 'file.below_reference_width');
+
+        $this->assertSame('warning', $issue['severity'], 'ویو باید ⚠️ نشان دهد نه ⛔');
+        $this->assertFalse($issue['scored']);
+        $this->assertStringContainsString('۷۰۰', $issue['message_fa']);
+        $this->assertStringContainsString('سند', $issue['hint_fa'], 'باید بگوید فایل را به‌صورت سند بفرستد');
+
+        // و مهم‌ترین بخش: هیچ ردیف اعتبارسنجی نمی‌سازد، پس امتیاز دست‌نخورده می‌ماند
+        $this->assertDatabaseMissing('validation_results', [
+            'case_document_id' => $document->id,
+            'rule_key' => 'file.below_reference_width',
+        ]);
+    }
+
+    public function test_an_image_at_the_reference_width_gets_no_advice(): void
+    {
+        $this->engineReturns(['width' => 960, 'height' => 540, 'blur_score' => 5695.47, 'brightness' => 176.35]);
+
+        $document = $this->documentWithFile($this->imageBytes('sharp', 960, 540, 'jpg'), 'card.jpg');
+
+        $this->precheck()->inspect($document);
+
+        $this->assertNotContains('file.below_reference_width', $this->issueCodes($document->refresh()));
+    }
+
+    public function test_the_resolution_ratio_comes_from_settings(): void
+    {
+        $this->engineReturns(['blur_score' => 400, 'brightness_score' => 200, 'contrast_score' => 40]);
+
+        $limits = Setting::get('precheck.limits');
+        $limits['min_reference_ratio'] = 0.4;
+        Setting::put('precheck.limits', $limits);
+
+        $document = $this->documentWithFile($this->imageBytes('sharp', 700, 394));
+
+        $this->precheck()->inspect($document);
+
+        $this->assertNotContains('file.below_reference_width', $this->issueCodes($document->refresh()));
+    }
+
+    /** موتوری که عرض قالب‌ها را نمی‌دهد نباید آپلود را زمین بزند. */
+    public function test_a_silent_engine_only_costs_the_advice(): void
+    {
+        $this->engineReturns(
+            ['width' => 700, 'height' => 394, 'blur_score' => 5695.47, 'brightness' => 176.35],
+            referenceWidths: null,
+        );
+
+        $document = $this->documentWithFile($this->imageBytes('sharp', 700, 394, 'jpg'), 'card.jpg');
+
+        $this->assertTrue($this->precheck()->inspect($document));
+        $this->assertNotContains('file.below_reference_width', $this->issueCodes($document->refresh()));
+    }
+
+    // ------------------------------------------------------------------
 
     private function precheck(): DocumentPrecheck
     {
@@ -392,10 +534,29 @@ class DocumentPrecheckTest extends TestCase
     }
 
     /** @param array<string, mixed> $quality */
-    private function engineReturns(array $quality): void
+    /**
+     * @param  array<string, mixed>  $quality
+     * @param  array<string, int>|null  $referenceWidths  عرض قالب هر نوع مدرک؛ null یعنی موتور جواب ندهد
+     */
+    private function engineReturns(array $quality, ?array $referenceWidths = ['national_card' => 960]): void
     {
-        $this->mock(HanaEngine::class, function (MockInterface $mock) use ($quality) {
+        $this->mock(HanaEngine::class, function (MockInterface $mock) use ($quality, $referenceWidths) {
             $mock->shouldReceive('imageQuality')->andReturn($quality);
+
+            if ($referenceWidths === null) {
+                $mock->shouldReceive('documentLayouts')
+                    ->andThrow(EngineException::crashed('document_layouts', 'ModuleNotFoundError: cv2'));
+
+                return;
+            }
+
+            $layouts = [];
+
+            foreach ($referenceWidths as $key => $width) {
+                $layouts[$key] = ['template_width' => $width];
+            }
+
+            $mock->shouldReceive('documentLayouts')->andReturn(['layouts' => $layouts]);
         });
     }
 
@@ -404,6 +565,7 @@ class DocumentPrecheckTest extends TestCase
     {
         $this->mock(HanaEngine::class, function (MockInterface $mock) {
             $mock->shouldNotReceive('imageQuality');
+            $mock->shouldNotReceive('documentLayouts');
         });
     }
 

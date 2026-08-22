@@ -8,6 +8,7 @@ use App\Models\Setting;
 use App\Models\ValidationResult;
 use App\Services\HanaEngine;
 use App\Support\PersianValue;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
@@ -41,9 +42,17 @@ final class DocumentPrecheck
         'max_bytes' => 12582912,          // ۱۲ مگابایت
         'min_width' => 600,
         'min_height' => 380,
+        // کمترین نسبت «عرض تصویر به عرض قالب مرجع» که راهنمای کیفیت نمی‌گیرد.
+        // زیر این عدد یعنی تصویر کوچک‌شده است (تلگرام و واتساپ همین کار را
+        // می‌کنند) و کاربر بهتر است نسخهٔ اصلی را بفرستد. بازدارنده نیست.
+        'min_reference_ratio' => 0.75,
         'min_blur_score' => 60,           // واریانس لاپلاسین؛ کمتر یعنی تارتر
         'min_brightness' => 40,
         'max_brightness' => 225,
+        // انحراف معیار روشناییِ تصویر خاکستری = «کنتراست». تنها چیزی که
+        // سوختنِ تصویر را از کاغذِ سفیدِ سالم جدا می‌کند — توضیحش پایین‌تر
+        // در brightnessIssues().
+        'min_contrast' => 18,
         'allowed_mimes' => ['image/jpeg', 'image/png', 'image/webp'],
     ];
 
@@ -141,6 +150,15 @@ final class DocumentPrecheck
 
         if ($dimensionsKnown && ! $this->hasBlocking($issues)) {
             $issues = array_merge($issues, $this->checkQuality($path, $facts, $limits));
+
+            // بعد از checkQuality چون این هم موتور را صدا می‌زند (هرچند یک بار
+            // در روز و کش‌شده) و قاعدهٔ «فایلِ ردشده پول موتور را خرج نمی‌کند»
+            // باید دست‌نخورده بماند.
+            $resolutionIssue = $this->checkResolution($document, (int) $facts['width'], $limits);
+
+            if ($resolutionIssue !== null) {
+                $issues[] = $resolutionIssue;
+            }
         }
 
         return $this->persist($document, $facts, $issues);
@@ -231,6 +249,99 @@ final class DocumentPrecheck
     }
 
     /**
+     * «این تصویر از رزولوشن مرجع کوچک‌تر است» — راهنما، نه ایراد.
+     *
+     * ریشهٔ پروندهٔ ۲۷۲: هر سه مدرک از تلگرام آمده بودند و تلگرام گواهینامه
+     * و کارت خودرو را به نصف اندازه کوچک کرده بود. موتور روی نصف رزولوشن
+     * کد ملی و تاریخ تولد را غلط خواند. حالا که مدرک در چند بزرگ‌نمایی
+     * خوانده می‌شود (تسک ۶۶۲) همان تصویر کوچک هم معمولاً درست درمی‌آید، پس
+     * این پیام **امتیاز کم نمی‌کند** و جلوی پردازش را هم نمی‌گیرد؛ فقط به
+     * کاربر می‌گوید چرا ممکن است نتیجه ضعیف باشد و چه کار کند.
+     *
+     * عرض مرجع از خودِ موتور پرسیده می‌شود (`document_layouts`) نه از یک عدد
+     * ثابت در پنل: اندازهٔ قالب‌ها در `hana_engine/layouts.py` تعریف شده و
+     * دوباره‌نویسی‌اش این‌جا همان ناهماهنگیِ خزنده‌ای را می‌سازد که یک بار
+     * دقت پلاک را صفر کرد.
+     *
+     * @param  array<string, mixed>  $limits
+     */
+    private function checkResolution(CaseDocument $document, int $width, array $limits): ?PrecheckIssue
+    {
+        $typeKey = $document->documentType?->key;
+
+        if ($typeKey === null) {
+            return null;
+        }
+
+        $reference = $this->referenceWidths()[$typeKey] ?? null;
+
+        if ($reference === null || $reference <= 0) {
+            return null; // این نوع مدرک قالب مرجع ندارد؛ حرفی برای گفتن نیست
+        }
+
+        $ratio = (float) $limits['min_reference_ratio'];
+
+        if ($ratio <= 0.0 || $width >= $reference * $ratio) {
+            return null;
+        }
+
+        $percent = (int) round(100 * $width / $reference);
+
+        return PrecheckIssue::notice(
+            'file.below_reference_width',
+            'عرض این تصویر '.PersianValue::toPersianDigits((string) $width).' پیکسل است، حدود '
+            .PersianValue::toPersianDigits((string) $percent).'٪ اندازه‌ای که برای خواندن مطمئنِ این مدرک انتظار می‌رود ('
+            .PersianValue::toPersianDigits((string) $reference).' پیکسل).',
+            'متن‌خوانی انجام می‌شود، ولی اگر نتیجه ناقص بود نسخهٔ اصلی عکس را بفرستید. '
+            .'پیام‌رسان‌ها (تلگرام، واتساپ) عکس را کوچک می‌کنند؛ فایل را به‌صورت «سند/فایل» بفرستید نه «عکس».',
+            [
+                'width' => $width,
+                'reference_width' => $reference,
+                'ratio' => round($width / $reference, 3),
+                'document_type' => $typeKey,
+            ],
+        );
+    }
+
+    /**
+     * عرض قالب مرجع هر نوع مدرک، از موتور — یک بار در روز پرسیده می‌شود.
+     *
+     * هر تماس با موتور یک پروسهٔ پایتون است و این عدد ماه‌ها ثابت می‌ماند، پس
+     * پرسیدنش به‌ازای هر آپلود اسراف محض است. اگر موتور در دسترس نباشد آرایهٔ
+     * خالی برمی‌گردد و بررسی بی‌سروصدا رد می‌شود — نبودِ یک راهنما دلیل خوبی
+     * برای زمین‌زدن آپلود نیست. نتیجهٔ خالی هم کش نمی‌شود تا اولین اجرای
+     * موفق بعدی جایش را بگیرد.
+     *
+     * @return array<string, int>
+     */
+    private function referenceWidths(): array
+    {
+        return Cache::remember('hana.reference_widths', now()->addDay(), function (): array {
+            try {
+                $layouts = app(HanaEngine::class)->documentLayouts()['layouts'] ?? [];
+            } catch (Throwable $exception) {
+                Log::info('عرض قالب‌های مرجع از موتور خوانده نشد؛ راهنمای رزولوشن رد شد.', [
+                    'exception' => $exception->getMessage(),
+                ]);
+
+                return [];
+            }
+
+            $widths = [];
+
+            foreach (is_array($layouts) ? $layouts : [] as $key => $layout) {
+                $width = is_array($layout) ? (int) ($layout['template_width'] ?? 0) : 0;
+
+                if ($width > 0) {
+                    $widths[(string) $key] = $width;
+                }
+            }
+
+            return $widths;
+        }) ?: [];
+    }
+
+    /**
      * تاری و روشنایی از پل موتور.
      *
      * موتور یک پروسهٔ پایتون بالا می‌آورد (اندازه‌گیری‌شده: حدود ۰٫۲ ثانیه برای
@@ -266,6 +377,7 @@ final class DocumentPrecheck
 
         $blur = isset($quality['blur_score']) ? (float) $quality['blur_score'] : null;
         $brightness = isset($quality['brightness']) ? (float) $quality['brightness'] : null;
+        $contrast = isset($quality['std']) ? (float) $quality['std'] : null;
 
         $facts['blur_score'] = $blur;
         $facts['brightness_score'] = $brightness;
@@ -275,6 +387,7 @@ final class DocumentPrecheck
         $minBlur = (float) $limits['min_blur_score'];
         $minBrightness = (float) $limits['min_brightness'];
         $maxBrightness = (float) $limits['max_brightness'];
+        $minContrast = (float) $limits['min_contrast'];
 
         if ($blur !== null && $blur < $minBlur) {
             $issues[] = PrecheckIssue::error(
@@ -292,16 +405,55 @@ final class DocumentPrecheck
                 'مدرک را زیر نور بیشتری بگذارید و نگذارید سایهٔ دست یا گوشی روی آن بیفتد.',
                 ['brightness' => $brightness, 'min_brightness' => $minBrightness],
             );
-        } elseif ($brightness !== null && $brightness > $maxBrightness) {
+        } elseif ($this->isBurntOut($brightness, $contrast, $maxBrightness, $minContrast)) {
             $issues[] = PrecheckIssue::error(
                 'file.too_bright',
                 'تصویر بیش از حد روشن است و نوشته‌ها محو شده‌اند.',
                 'فلاش را خاموش کنید و از تابش مستقیم نور یا انعکاس روی سطح مدرک فاصله بگیرید.',
-                ['brightness' => $brightness, 'max_brightness' => $maxBrightness],
+                [
+                    'brightness' => $brightness,
+                    'max_brightness' => $maxBrightness,
+                    'contrast' => $contrast,
+                    'min_contrast' => $minContrast,
+                ],
             );
         }
 
         return $issues;
+    }
+
+    /**
+     * آیا تصویر واقعاً «سوخته» است، یا فقط کاغذش سفید است؟
+     *
+     * ⚠️ این‌جا یک باگ واقعی بسته شده. سنجهٔ `brightness` موتور میانگین کانال
+     * V در HSV است؛ برای مدرکی که روی کاغذ سفید چاپ شده این عدد ذاتاً بالاست.
+     * اندازه‌گیری روی خروجی خودِ ژنراتور پروژه:
+     *
+     *   کارت ملی ۲۴۰.۵ — کنتراست ۲۷.۴   (سالم، ولی از سقف ۲۲۵ رد می‌شد)
+     *   گواهینامه ۲۲۲.۶ — کنتراست ۵۱.۶
+     *   کارت خودرو ۲۰۴.۹ — کنتراست ۴۶.۳
+     *
+     * یعنی شرط قبلی («هر چه روشن‌تر از ۲۲۵ = رد») **هر کارت ملی سالمی** را رد
+     * می‌کرد و عملاً هیچ پروندهٔ مجوزی از گام بارگذاری رد نمی‌شد. در دادهٔ
+     * نمایشی دیده نمی‌شد چون DemoCasesSeeder عدد روشنایی را خودش می‌نویسد و
+     * تصویر واقعی را نمی‌سنجد.
+     *
+     * چرا با کنتراست حل می‌شود: وقتی فلاش تصویر را می‌سوزاند، خودِ روشنایی
+     * اشباع می‌شود و دیگر چیزی نمی‌گوید (۲۴۱.۹ برای تصویر سالم در برابر ۲۵۳.۹
+     * برای نسخهٔ کاملاً سوخته)، ولی جوهر از کاغذ فاصله‌اش را از دست می‌دهد و
+     * کنتراست می‌ریزد: ۲۲.۶ → ۱۳.۷. همان چیزی که «نوشته‌ها محو شده‌اند» یعنی.
+     * پس رد کردن فقط وقتی درست است که **هر دو** شرط برقرار باشد.
+     *
+     * اگر موتور کنتراست نداد (نسخهٔ قدیمی‌تر)، به رفتار قبلی برمی‌گردیم تا
+     * تصویر سوخته بی‌بررسی رد نشود.
+     */
+    private function isBurntOut(?float $brightness, ?float $contrast, float $maxBrightness, float $minContrast): bool
+    {
+        if ($brightness === null || $brightness <= $maxBrightness) {
+            return false;
+        }
+
+        return $contrast === null || $contrast < $minContrast;
     }
 
     // ------------------------------------------------------------------
@@ -354,6 +506,12 @@ final class DocumentPrecheck
             ->delete();
 
         foreach ($issues as $issue) {
+            // راهنمای کیفیت (scored=false) در precheck_issues دیده می‌شود ولی
+            // ردیف اعتبارسنجی نمی‌گیرد، پس امتیاز پرونده را کم نمی‌کند.
+            if (! $issue->scored) {
+                continue;
+            }
+
             ValidationResult::create([
                 'case_id' => $document->case_id,
                 'case_document_id' => $document->id,
