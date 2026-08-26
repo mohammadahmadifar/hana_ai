@@ -29,20 +29,28 @@
         @enderror
 
         <div class="stack">
+            {{--
+                نام کاربری کد ملی است، نه ایمیل (تسک ۷۴۰).
+                inputmode="numeric" روی موبایل صفحه‌کلید عددی می‌آورد، و
+                maxlength جلوی کد ملی‌های پرکاراکترِ کپی‌شده را می‌گیرد؛ ارقام
+                فارسی هم پذیرفته می‌شوند و سمت سرور به لاتین تبدیل می‌شوند.
+            --}}
             <div class="field">
-                <label class="label" for="email">ایمیل <span class="label__req">*</span></label>
+                <label class="label" for="national_id">کد ملی <span class="label__req">*</span></label>
                 <input
-                    class="input input--ltr @error('email') is-invalid @enderror @error('auth') is-invalid @enderror"
-                    id="email"
-                    type="email"
-                    name="email"
-                    value="{{ old('email') }}"
+                    class="input input--ltr @error('national_id') is-invalid @enderror @error('auth') is-invalid @enderror"
+                    id="national_id"
+                    type="text"
+                    name="national_id"
+                    value="{{ old('national_id') }}"
                     autocomplete="username"
-                    inputmode="email"
+                    inputmode="numeric"
+                    maxlength="20"
                     dir="ltr"
                     autofocus
                     required>
-                @error('email')
+                <span class="hint">همان ده رقمِ روی کارت ملی، بدون خط تیره.</span>
+                @error('national_id')
                     <span class="error">{{ $message }}</span>
                 @enderror
             </div>

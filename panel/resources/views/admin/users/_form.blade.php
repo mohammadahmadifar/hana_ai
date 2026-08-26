@@ -2,7 +2,7 @@
 @php
     $editing = isset($user) && $user !== null;
     $isSelf = $isSelf ?? false;
-    $currentRole = old('role', $editing ? $user->role : 'expert');
+    $currentRole = old('role', $editing ? $user->role : \App\Models\User::DEFAULT_ROLE);
     $currentActive = (bool) old('is_active', $editing ? $user->is_active : true);
 @endphp
 
@@ -23,8 +23,44 @@
                id="email" type="email" name="email" maxlength="190" dir="ltr"
                autocomplete="off"
                value="{{ old('email', $editing ? $user->email : '') }}" required>
-        <span class="hint">ورود به سامانه با همین ایمیل انجام می‌شود.</span>
+        <span class="hint">برای تماس و اطلاع‌رسانی؛ ورود به سامانه با کد ملی انجام می‌شود.</span>
         @error('email')
+            <span class="error">{{ $message }}</span>
+        @enderror
+    </div>
+</div>
+
+<div class="formgrid">
+    {{--
+        تسک ۷۴۰: نام کاربری ورود همین است، پس در فرم اجباری است — و روی حساب
+        خودِ مدیر قفل است، دقیقاً مثل نقش و وضعیت حساب: اشتباه نوشتنش یعنی
+        بیرون‌ماندن از سامانه‌ای که نه ثبت‌نام دارد نه بازیابی رمز.
+    --}}
+    <div class="field">
+        <label class="label" for="national_id">
+            کد ملی
+            @unless ($isSelf)
+                <span class="label__req">*</span>
+            @endunless
+        </label>
+        @if ($isSelf)
+            <input class="input input--ltr" id="national_id" type="text" dir="ltr"
+                   value="{{ $user->national_id }}" readonly>
+            <span class="hint">
+                کد ملی حساب خودتان قابل تغییر نیست — همین کد نام کاربری ورود شماست و
+                اشتباه نوشتنش شما را بیرون می‌گذارد. از مدیر دیگری بخواهید عوضش کند.
+            </span>
+        @else
+            <input class="input input--ltr @error('national_id') is-invalid @enderror"
+                   id="national_id" type="text" name="national_id" maxlength="20" dir="ltr"
+                   inputmode="numeric" autocomplete="off"
+                   value="{{ old('national_id', $editing ? $user->national_id : '') }}" required>
+            <span class="hint">
+                ده رقم با رقم کنترل معتبر. <strong>کاربر با همین کد وارد سامانه می‌شود</strong>،
+                نه با ایمیل. ارقام فارسی هم پذیرفته می‌شود.
+            </span>
+        @endif
+        @error('national_id')
             <span class="error">{{ $message }}</span>
         @enderror
     </div>
@@ -42,7 +78,11 @@
                     <option value="{{ $key }}" @selected($currentRole === $key)>{{ $label }}</option>
                 @endforeach
             </select>
-            <span class="hint">مدیر سامانه به همه بخش‌ها، کارشناس بررسی به پرونده‌ها و کارشناس داده به دیتاست دسترسی دارد.</span>
+            <span class="hint">
+                مدیر سامانه به همه بخش‌ها، کارشناس بررسی به پرونده‌ها و صف بررسی،
+                کارشناس داده به دیتاست و تگ‌گذاری، و متقاضی فقط به ثبت درخواست خودش
+                و دیدن نتیجهٔ آن دسترسی دارد.
+            </span>
         @endif
         @error('role')
             <span class="error">{{ $message }}</span>

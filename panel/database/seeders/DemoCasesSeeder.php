@@ -254,10 +254,13 @@ class DemoCasesSeeder extends Seeder
             return $user;
         }
 
+        // کد ملی از تسک ۷۴۰ نام کاربری ورود است؛ حسابِ بی‌کدملی حسابی است که
+        // هرگز نمی‌تواند وارد شود، و چون ستون nullable است هیچ‌جا هم صدا نمی‌دهد.
         $user = new User;
         $user->forceFill([
             'name' => 'کارشناس نمونه',
             'email' => 'demo.expert@hana.local',
+            'national_id' => '0055555551',
             'password' => Hash::make(env('SEED_PASSWORD', 'hana@1405')),
             'role' => 'expert',
             'is_active' => true,

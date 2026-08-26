@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\PersianValue;
+use Closure;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -31,9 +33,19 @@ class UserController extends Controller
 
         $users = User::query()
             ->when($q !== '', function ($builder) use ($q) {
-                $builder->where(function ($inner) use ($q) {
+                // جست‌وجو با کد ملی هم کار می‌کند و همان‌جا به لاتین تبدیل
+                // می‌شود: از تسک ۷۴۰ نام کاربری همین است، پس مدیر معمولاً همین
+                // را در دست دارد — و اگر از روی مدرک با ارقام فارسی رونویسی کند
+                // نباید دست خالی برگردد.
+                $digits = User::normalizeNationalId($q);
+
+                $builder->where(function ($inner) use ($q, $digits) {
                     $inner->where('name', 'like', '%'.$q.'%')
                         ->orWhere('email', 'like', '%'.$q.'%');
+
+                    if ($digits !== '') {
+                        $inner->orWhere('national_id', 'like', '%'.$digits.'%');
+                    }
                 });
             })
             ->when(array_key_exists($role, User::ROLES), fn ($builder) => $builder->where('role', $role))
@@ -67,9 +79,12 @@ class UserController extends Controller
     /** ذخیرهٔ کاربر تازه. */
     public function store(Request $request): RedirectResponse
     {
+        $request->merge(['national_id' => User::normalizeNationalId($request->input('national_id'))]);
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
             'email' => ['required', 'string', 'email:rfc', 'max:190', Rule::unique('users', 'email')],
+            'national_id' => self::nationalIdRules(),
             'role' => ['required', 'string', Rule::in(array_keys(User::ROLES))],
             'password' => ['required', 'string', 'min:8', 'max:72', 'confirmed'],
         ], self::messages(), self::attributes());
@@ -78,6 +93,7 @@ class UserController extends Controller
         $user = new User();
         $user->name = $data['name'];
         $user->email = $data['email'];
+        $user->national_id = $data['national_id'];
         $user->role = $data['role'];
         $user->is_active = $request->boolean('is_active');
         $user->password = Hash::make($data['password']);
@@ -103,16 +119,25 @@ class UserController extends Controller
     {
         $isSelf = $request->user()->is($user);
 
+        $request->merge(['national_id' => User::normalizeNationalId($request->input('national_id'))]);
+
         $rules = [
             'name' => ['required', 'string', 'max:120'],
             'email' => ['required', 'string', 'email:rfc', 'max:190', Rule::unique('users', 'email')->ignore($user->id)],
             'password' => ['nullable', 'string', 'min:8', 'max:72', 'confirmed'],
         ];
 
-        // مدیر نمی‌تواند نقش خودش را عوض کند یا خودش را غیرفعال کند؛
-        // برای همین این دو ورودی برای حساب خودش اصلاً اعتبارسنجی و اعمال نمی‌شوند.
+        // مدیر نمی‌تواند نقش خودش را عوض کند، خودش را غیرفعال کند، یا کد ملی
+        // خودش را دست بزند؛ برای همین این سه ورودی برای حساب خودش اصلاً
+        // اعتبارسنجی و اعمال نمی‌شوند.
+        //
+        // کد ملی از تسک ۷۴۰ **نام کاربری ورود** است، پس تنها فیلدی است که
+        // اشتباه نوشتنش مدیر را از سامانه بیرون می‌گذارد — و سامانه نه ثبت‌نام
+        // دارد نه بازیابی رمز، یعنی راه برگشتی از رابط کاربری نیست. دقیقاً همان
+        // منطقِ «نقش خودت را عوض نکن»: از مدیر دیگری بخواهید.
         if (! $isSelf) {
             $rules['role'] = ['required', 'string', Rule::in(array_keys(User::ROLES))];
+            $rules['national_id'] = self::nationalIdRules($user->id);
         }
 
         $data = $request->validate($rules, self::messages(), self::attributes());
@@ -121,6 +146,7 @@ class UserController extends Controller
         $user->email = $data['email'];
 
         if (! $isSelf) {
+            $user->national_id = $data['national_id'];
             $user->role = $data['role'];
             $user->is_active = $request->boolean('is_active');
 
@@ -150,7 +176,7 @@ class UserController extends Controller
         }
 
         $note = $isSelf
-            ? 'حساب خودتان به‌روزرسانی شد. (نقش و وضعیت حساب خودتان قابل تغییر نیست.)'
+            ? 'حساب خودتان به‌روزرسانی شد. (کد ملی، نقش و وضعیت حساب خودتان قابل تغییر نیست.)'
             : 'کاربر «'.$user->name.'» به‌روزرسانی شد.';
 
         return redirect()->route('admin.users.index')->with('success', $note);
@@ -178,6 +204,36 @@ class UserController extends Controller
         return redirect()
             ->route('admin.users.index')
             ->with('success', 'کاربر «'.$user->name.'» غیرفعال شد و دیگر نمی‌تواند وارد شود.');
+    }
+
+    /**
+     * قاعدهٔ کد ملی — یک جا تعریف می‌شود و دو جا (ساخت و ویرایش) استفاده.
+     *
+     * `digits:10` شکل را می‌گیرد و قاعدهٔ بسته رقم کنترل را؛ همان الگوریتمی که
+     * اعتبارسنجی مدارک روی کد ملیِ خوانده‌شده اجرا می‌کند. دو تعریف موازی از
+     * «کد ملی درست» یعنی حسابی ساخته می‌شود که مدارک خودش را رد می‌کند.
+     *
+     * @return list<mixed>
+     */
+    private static function nationalIdRules(?int $ignoreId = null): array
+    {
+        return [
+            // bail لازم است: بدون آن، ورودی پنج‌رقمی هم قاعدهٔ رقم کنترل را
+            // اجرا می‌کند و هم یک کوئری unique می‌زند، و کنار پیام «۱۰ رقم»
+            // پیام گمراه‌کنندهٔ «وجود خارجی ندارد» می‌نشیند.
+            'bail',
+            'required',
+            'string',
+            'digits:10',
+            function (string $attribute, mixed $value, Closure $fail): void {
+                if (! PersianValue::isValidNationalId((string) $value)) {
+                    $fail('رقم کنترل کد ملی درست نیست؛ این کد ملی وجود خارجی ندارد.');
+                }
+            },
+            $ignoreId === null
+                ? Rule::unique('users', 'national_id')
+                : Rule::unique('users', 'national_id')->ignore($ignoreId),
+        ];
     }
 
     /**
@@ -210,6 +266,9 @@ class UserController extends Controller
             'min' => ':attribute کوتاه‌تر از حد مجاز است.',
             'name.max' => 'نام و نام خانوادگی نباید بیش از ۱۲۰ نویسه باشد.',
             'email.max' => 'ایمیل نباید بیش از ۱۹۰ نویسه باشد.',
+            'national_id.required' => 'کد ملی الزامی است؛ کاربر با همین کد وارد سامانه می‌شود.',
+            'national_id.digits' => 'کد ملی باید دقیقاً ۱۰ رقم باشد (ارقام فارسی یا لاتین). '
+                .'اگر صفرهای ابتدایی افتاده‌اند، آن‌ها را هم بنویسید.',
             'password.min' => 'رمز عبور باید دست‌کم ۸ نویسه باشد.',
             'password.max' => 'رمز عبور نباید بیش از ۷۲ نویسه باشد.',
             'unique' => 'این :attribute قبلاً برای کاربر دیگری ثبت شده است.',
@@ -224,6 +283,7 @@ class UserController extends Controller
         return [
             'name' => 'نام و نام خانوادگی',
             'email' => 'ایمیل',
+            'national_id' => 'کد ملی',
             'role' => 'نقش',
             'password' => 'رمز عبور',
             'is_active' => 'وضعیت حساب',

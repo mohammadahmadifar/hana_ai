@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Str;
 use Illuminate\View\View;
 
 /**
@@ -28,17 +27,19 @@ class LoginController extends Controller
     private const DECAY_SECONDS = 60;
 
     /**
-     * سقف تلاش ناموفق برای یک آی‌پی، مستقل از ایمیل.
+     * سقف تلاش ناموفق برای یک آی‌پی، مستقل از کد ملی.
      *
-     * بدون این سقف، مهاجم می‌تواند با عوض کردن ایمیل در هر تلاش
-     * بی‌نهایت آدرس را از یک آی‌پی امتحان کند و فهرست کاربران را بسازد.
+     * بدون این سقف، مهاجم می‌تواند با عوض کردن کد ملی در هر تلاش
+     * بی‌نهایت شماره را از یک آی‌پی امتحان کند و فهرست کاربران را بسازد.
+     * از تسک ۷۴۰ این سقف مهم‌تر هم شده: فضای کد ملی از فضای ایمیل کوچک‌تر و
+     * قابل شمارش‌تر است، پس پویش کورکورانه ارزان‌تر است.
      */
     private const MAX_IP_ATTEMPTS = 20;
 
     /**
      * هش ساختگی برای هم‌زمان‌سازی پاسخ.
      *
-     * وقتی ایمیل در پایگاه داده نیست، به‌جای بازگشت فوری، یک بررسی هش روی همین
+     * وقتی کد ملی در پایگاه داده نیست، به‌جای بازگشت فوری، یک بررسی هش روی همین
      * مقدار انجام می‌شود تا زمان پاسخ «کاربر هست» و «کاربر نیست» یکی بماند.
      * با هزینهٔ (cost) پیش‌فرض پروژه ساخته شده؛ اگر BCRYPT_ROUNDS عوض شد، این را هم بازتولید کنید.
      */
@@ -54,26 +55,42 @@ class LoginController extends Controller
         return view('auth.login');
     }
 
-    /** بررسی اطلاعات ورود و ساخت نشست. */
+    /**
+     * بررسی اطلاعات ورود و ساخت نشست.
+     *
+     * نام کاربری کد ملی است، نه ایمیل (تسک ۷۴۰). ورودی پیش از هر کاری با
+     * User::normalizeNationalId() به ارقام لاتین و بدون جداکننده تبدیل می‌شود:
+     * کاربری که با صفحه‌کلید فارسی تایپ می‌کند و کاربری که با لاتین، باید به یک
+     * ردیف برسند — هم برای جست‌وجو، هم برای کلید شمارش تلاش‌ها، وگرنه سقف پنج
+     * تلاش با عوض‌کردن شکل ارقام دور زده می‌شود.
+     */
     public function login(Request $request): RedirectResponse
     {
+        $request->merge([
+            'national_id' => User::normalizeNationalId($request->input('national_id')),
+        ]);
+
         $data = $request->validate([
-            'email' => ['required', 'string', 'email:rfc', 'max:190'],
+            'national_id' => ['bail', 'required', 'string', 'digits:10'],
             'password' => ['required', 'string', 'max:72'],
         ], [
-            'email.required' => 'ایمیل را وارد کنید.',
-            'email.email' => 'قالب ایمیل درست نیست.',
-            'email.max' => 'ایمیل نباید بیش از ۱۹۰ نویسه باشد.',
+            'national_id.required' => 'کد ملی را وارد کنید.',
+            // کد ملی ایرانی صفر ابتدایی دارد و اکسل و پیام‌رسان‌ها آن را
+            // می‌خورند؛ پیام باید همین را بگوید، وگرنه کاربر بارها همان
+            // هشت رقم را دوباره می‌زند. عمداً خودمان صفر اضافه نمی‌کنیم:
+            // ساختنِ رقمی که کاربر ننوشته یعنی حدس‌زدنِ نام کاربری او.
+            'national_id.digits' => 'کد ملی باید دقیقاً ۱۰ رقم باشد. '
+                .'اگر صفرهای ابتدایی افتاده‌اند، آن‌ها را هم بنویسید.',
             'password.required' => 'رمز عبور را وارد کنید.',
             'password.max' => 'رمز عبور نباید بیش از ۷۲ نویسه باشد.',
         ]);
 
-        $key = $this->throttleKey($request, $data['email']);
+        $key = $this->throttleKey($request, $data['national_id']);
         $ipKey = $this->ipThrottleKey($request);
 
         // دو پنجرهٔ محدودیت:
-        //   ۱) هر «ایمیل + آی‌پی»: ۵ تلاش ناموفق در دقیقه (حمله به یک حساب مشخص).
-        //   ۲) خود آی‌پی: ۲۰ تلاش ناموفق در دقیقه (پویش فهرست ایمیل‌ها با عوض کردن آدرس).
+        //   ۱) هر «کد ملی + آی‌پی»: ۵ تلاش ناموفق در دقیقه (حمله به یک حساب مشخص).
+        //   ۲) خود آی‌پی: ۲۰ تلاش ناموفق در دقیقه (پویش کد ملی‌ها با عوض کردن شماره).
         if (RateLimiter::tooManyAttempts($key, self::MAX_ATTEMPTS)) {
             return $this->failed($request, $this->lockedMessage(RateLimiter::availableIn($key)));
         }
@@ -82,10 +99,10 @@ class LoginController extends Controller
             return $this->failed($request, $this->lockedMessage(RateLimiter::availableIn($ipKey)));
         }
 
-        $user = User::query()->where('email', $data['email'])->first();
+        $user = User::query()->where('national_id', $data['national_id'])->first();
 
         // بررسی هش همیشه انجام می‌شود — چه کاربر وجود داشته باشد چه نه — تا زمان پاسخ
-        // نگوید کدام ایمیل‌ها در سامانه ثبت‌شده‌اند.
+        // نگوید کدام کد ملی‌ها در سامانه ثبت‌شده‌اند.
         $passwordOk = Hash::check(
             $data['password'],
             $user !== null ? (string) $user->password : self::TIMING_DUMMY_HASH
@@ -94,7 +111,7 @@ class LoginController extends Controller
         if ($user === null || ! $passwordOk) {
             $this->recordFailure($key, $ipKey);
 
-            return $this->failed($request, 'ایمیل یا رمز عبور درست نیست.');
+            return $this->failed($request, 'کد ملی یا رمز عبور درست نیست.');
         }
 
         if (! $user->is_active) {
@@ -106,8 +123,14 @@ class LoginController extends Controller
             );
         }
 
+        // فقط شمارندهٔ همین حساب پاک می‌شود، نه شمارندهٔ آی‌پی.
+        //
+        // سقف آی‌پی برای «پویش کد ملی‌ها»ست، یعنی حمله‌ای که ذاتاً از حساب‌های
+        // مختلف رد می‌شود؛ اگر ورود موفق پاکش کند، هر کسی که یک حساب معتبر دارد
+        // — حتی یک متقاضی — می‌تواند نوزده حدس بزند، یک بار با حساب خودش وارد
+        // شود، و شمارنده را برای همیشه صفر نگه دارد. فضای ده‌رقمیِ کد ملی از
+        // فضای ایمیل بسیار کوچک‌تر است، پس این سقف تنها ترمز پویش است.
         RateLimiter::clear($key);
-        RateLimiter::clear($ipKey);
 
         Auth::login($user, $request->boolean('remember'));
 
@@ -138,7 +161,7 @@ class LoginController extends Controller
     private function failed(Request $request, string $message): RedirectResponse
     {
         return back()
-            ->withInput($request->only('email', 'remember'))
+            ->withInput($request->only('national_id', 'remember'))
             ->withErrors(['auth' => $message]);
     }
 
@@ -149,13 +172,13 @@ class LoginController extends Controller
         RateLimiter::hit($ipKey, self::DECAY_SECONDS);
     }
 
-    /** کلید شمارش تلاش‌ها: ترکیب ایمیل و آی‌پی درخواست. */
-    private function throttleKey(Request $request, string $email): string
+    /** کلید شمارش تلاش‌ها: ترکیب کد ملی و آی‌پی درخواست. */
+    private function throttleKey(Request $request, string $nationalId): string
     {
-        return 'hana-login|'.Str::lower($email).'|'.$request->ip();
+        return 'hana-login|'.$nationalId.'|'.$request->ip();
     }
 
-    /** کلید شمارش تلاش‌ها فقط بر پایهٔ آی‌پی، مستقل از ایمیل واردشده. */
+    /** کلید شمارش تلاش‌ها فقط بر پایهٔ آی‌پی، مستقل از کد ملی واردشده. */
     private function ipThrottleKey(Request $request): string
     {
         return 'hana-login-ip|'.$request->ip();

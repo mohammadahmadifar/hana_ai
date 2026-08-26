@@ -31,7 +31,7 @@
         <div class="card__body">
             <form class="row" method="GET" action="{{ route('admin.users.index') }}">
                 <input class="input" type="search" name="q" value="{{ $q }}"
-                       placeholder="جست‌وجو در نام یا ایمیل" style="max-width:280px">
+                       placeholder="جست‌وجو در نام، کد ملی یا ایمیل" style="max-width:280px">
                 <select class="select" name="role" style="max-width:200px">
                     <option value="">همهٔ نقش‌ها</option>
                     @foreach ($roles as $key => $label)
@@ -56,6 +56,7 @@
                             <tr>
                                 <th>#</th>
                                 <th>نام</th>
+                                <th>کد ملی (نام کاربری)</th>
                                 <th>ایمیل</th>
                                 <th>نقش</th>
                                 <th>وضعیت</th>
@@ -73,6 +74,7 @@
                                             <span class="badge badge--info">شما</span>
                                         @endif
                                     </td>
+                                    <td class="num nowrap">{{ $row->nationalIdLabel() }}</td>
                                     <td class="ltr">{{ $row->email }}</td>
                                     <td>{{ $row->roleLabel() }}</td>
                                     <td>
