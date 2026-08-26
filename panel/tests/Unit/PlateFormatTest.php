@@ -65,6 +65,45 @@ class PlateFormatTest extends TestCase
         }
     }
 
+    /**
+     * تکه‌های نمایش گرافیکی (تسک ۷۴۱) از همان قالب رسمی درمی‌آیند.
+     *
+     * ورودی‌های زیر همه یک پلاک‌اند و باید یک نتیجه بدهند، وگرنه نمایش پلاک و
+     * اعتبارسنجی پلاک دو تعریف متفاوت از «درست» پیدا می‌کنند.
+     */
+    public function test_plate_parts_come_from_the_official_format(): void
+    {
+        foreach (['۱۲ ب ۳۴۵ ایران ۶۷', '۱۲ ب ۳۴۵ ۶۷', '۱۲ ۳۴۵ ب ۶۷', '12 ب 345 ایران 67'] as $plate) {
+            $this->assertSame(
+                ['digits' => '۱۲', 'letter' => 'ب', 'serial' => '۳۴۵', 'province' => '۶۷'],
+                PersianValue::plateParts($plate),
+                "تکه‌های این پلاک باید یکی باشند: {$plate}",
+            );
+        }
+    }
+
+    /** حرف چندنویسه‌ای هم باید سالم دربیاید، نه بریده. */
+    public function test_multi_letter_plate_letter_is_kept_whole(): void
+    {
+        $this->assertSame('الف', PersianValue::plateParts('۸۸ الف ۵۱۱ ایران ۳۵')['letter']);
+    }
+
+    /**
+     * مقداری که با الگو نمی‌خواند null می‌دهد تا ویو به متن خام برگردد.
+     *
+     * کادرِ پلاکِ نصفه‌کاره به کارشناس می‌گوید «این را خواندیم»، در حالی که
+     * نخوانده‌ایم — بدتر از نشان‌دادن همان متن ناخوانا.
+     */
+    public function test_unreadable_values_have_no_parts(): void
+    {
+        foreach (['', null, 'بدون پلاک', '۱۲ ب ۳۴ ایران ۶۷', '۱۲۳۴۵۶۷'] as $plate) {
+            $this->assertNull(
+                PersianValue::plateParts($plate),
+                'این مقدار نباید تکه‌های پلاک بدهد: '.var_export($plate, true),
+            );
+        }
+    }
+
     public function test_broken_plates_are_rejected_with_an_actionable_message(): void
     {
         foreach (['12 b 345 67', '۱۲ ب ۳۴ ایران ۶۷', 'بدون پلاک', '۱۲۳۴۵۶۷'] as $plate) {

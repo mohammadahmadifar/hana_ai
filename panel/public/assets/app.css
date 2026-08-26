@@ -582,6 +582,98 @@ code {
   font-family: "Vazirmatn", monospace;
 }
 
+/* ---------- پلاک خودرو ---------- */
+/*
+   شکل واقعی پلاک ایرانی، نه رشتهٔ متنی: نوار آبی «I.R.IRAN» در چپ، بدنهٔ سفید
+   با دو رقم و حرف و سه رقم، و کد استان در کادر جدا سمت راست.
+
+   سه نکته که شکستنشان ساکت است:
+   - رنگ‌ها عمداً ثابت‌اند و از توکن تم نمی‌آیند: پلاک واقعی در تم تیره هم
+     سفید است، و پلاکِ تیره دیگر پلاک نیست. تنها چیزی که با تم عوض می‌شود
+     قاب بیرونی است تا لبه‌اش روی زمینهٔ تیره گم نشود.
+   - کل کادر dir="ltr" است (در خود کامپوننت)، وگرنه در صفحهٔ راست‌چین ترتیب
+     «کد استان ← ارقام» وارونه می‌شود.
+   - اندازه با em بسته شده تا plate--sm فقط با یک font-size کوچک شود.
+*/
+.plate {
+  --plate-h: 2.6em;
+  display: inline-flex;
+  align-items: stretch;
+  height: var(--plate-h);
+  font-size: 15px;
+  line-height: 1;
+  background: #ffffff;
+  color: #101010;
+  border: 1px solid #101010;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+  max-width: 100%;
+  user-select: text;
+}
+.plate--sm { font-size: 12px; }
+
+.plate__iran {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .18em;
+  background: #12489a;
+  color: #ffffff;
+  padding: .2em .3em;
+  flex: 0 0 auto;
+}
+.plate__flag {
+  display: block;
+  width: 1.1em;
+  height: .62em;
+  border: 1px solid rgb(255 255 255 / 55%);
+  background: linear-gradient(to bottom, #17a35a 0 33.4%, #ffffff 33.4% 66.7%, #d8232a 66.7% 100%);
+}
+.plate__country {
+  font-size: .42em;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-align: center;
+  line-height: 1.15;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.plate__main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .34em;
+  padding: 0 .5em;
+  font-size: 1.35em;
+  font-weight: 700;
+  flex: 1 1 auto;
+}
+.plate__letter { font-weight: 800; }
+
+.plate__province {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-inline-start: 1px solid #101010;
+  padding: 0 .4em;
+  flex: 0 0 auto;
+}
+.plate__code { font-size: 1.15em; font-weight: 700; }
+.plate__label { font-size: .5em; color: #444444; }
+
+/* مقداری که با الگوی پلاک نخواند — همان متن خام، بدون کادر گمراه‌کننده */
+.plate-raw { font-variant-numeric: tabular-nums; }
+
+@media (prefers-color-scheme: dark) {
+  .plate { border-color: #6c7a78; box-shadow: none; }
+}
+:root[data-theme="dark"] .plate { border-color: #6c7a78; box-shadow: none; }
+
 /* ---------- صفحه ورود ---------- */
 .authpage {
   min-height: 100vh;

@@ -106,6 +106,26 @@
                     <button type="submit" class="btn btn--primary">🔍 OCR بگیر</button>
                 </form>
 
+                @if ($caseServices->isNotEmpty())
+                    {{-- تسک ۶۲۷: همین تصویر مستقیم وارد فرایند بررسی شود، بدون
+                         دانلود و بارگذاری دستی. یک پروندهٔ پیش‌نویس تازه ساخته
+                         می‌شود و این تصویر مدرکِ اولش است. --}}
+                    <form method="POST" action="{{ route('cases.fromTestImage', $image) }}" class="row">
+                        @csrf
+                        @if ($caseServices->count() > 1)
+                            <select name="service_type_id" id="case-service" class="select"
+                                    aria-label="نوع خدمت پرونده">
+                                @foreach ($caseServices as $service)
+                                    <option value="{{ $service->id }}">{{ $service->label_fa }}</option>
+                                @endforeach
+                            </select>
+                        @else
+                            <input type="hidden" name="service_type_id" value="{{ $caseServices->first()->id }}">
+                        @endif
+                        <button type="submit" class="btn btn--ghost">📤 بفرست به فرایند بررسی</button>
+                    </form>
+                @endif
+
                 @if (auth()->user()->canManageDataset())
                     @if ($inDataset)
                         <x-badge tone="ok" label="✔ در دیتاست ثبت شده" />
@@ -268,7 +288,7 @@
                                         <tr><th scope="row">شمارهٔ شاسی</th><td class="mono ltr">{{ $ocr['extra']['vin'] }}</td></tr>
                                     @endif
                                     @if (filled($ocr['extra']['plate'] ?? null))
-                                        <tr><th scope="row">پلاک</th><td class="num">{{ $ocr['extra']['plate'] }}</td></tr>
+                                        <tr><th scope="row">پلاک</th><td><x-plate :value="$ocr['extra']['plate']" size="sm" /></td></tr>
                                     @endif
                                 </tbody>
                             </table>

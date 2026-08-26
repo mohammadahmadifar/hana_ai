@@ -184,6 +184,41 @@ final class PersianValue
         return $plain;
     }
 
+    /**
+     * تکه‌های پلاک، برای نمایش گرافیکی (تسک ۷۴۱).
+     *
+     * چرا این‌جا و نه داخل کامپوننت بلید: قالب پلاک از قبل در همین کلاس تعریف
+     * شده (canonicalPlate و validatePlate)، و دو تعریف موازی از «پلاک درست»
+     * همان تله‌ای است که یک بار دقت پلاک را صفر کرد — قالب چاپ و format_plate
+     * ترتیبشان یکی نبود.
+     *
+     * مقداری که با الگو نمی‌خواند null برمی‌گرداند تا ویو بتواند به نمایش متنی
+     * برگردد: OCR ناخوانا نباید کادر خالیِ پلاک بسازد.
+     *
+     * @return array{digits: string, letter: string, serial: string, province: string}|null
+     */
+    public static function plateParts(?string $value): ?array
+    {
+        $plain = self::forEngine('plate', $value);
+
+        if ($plain === '') {
+            return null;
+        }
+
+        $letters = self::plateLetterPattern();
+
+        if (! preg_match('/^([۰-۹]{2}) ('.$letters.') ([۰-۹]{3}) ایران ([۰-۹]{2})$/u', $plain, $m)) {
+            return null;
+        }
+
+        return [
+            'digits' => $m[1],
+            'letter' => $m[2],
+            'serial' => $m[3],
+            'province' => $m[4],
+        ];
+    }
+
     /** الگوی regex حروف مجاز پلاک — یک جا تعریف می‌شود و دو جا استفاده. */
     private static function plateLetterPattern(): string
     {

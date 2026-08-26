@@ -199,10 +199,16 @@ class CaseReviewTest extends TestCase
         $response->assertSee('name="fields[national_id]"', false);
         $response->assertSee(PersianValue::toPersianDigits(self::NID));
 
+        // پلاک به شکل خودِ پلاک نشان داده می‌شود، نه یک رشتهٔ متنی (تسک ۷۴۱):
+        // کادر، نوار «I.R.IRAN» و کد استانِ جدا.
+        $response->assertSee('class="plate plate--sm"', false);
+        $response->assertSee('aria-label="شمارهٔ پلاک: ۱۲ ب ۳۴۵ ایران ۶۷"', false);
+        $response->assertSee('<span class="plate__code">۶۷</span>', false);
+
         // فهرست دلایل: هم پیام سبز، هم پیام قرمز
         $response->assertSee('کد ملی روی هر ۳ مدرک یکی است.');
         $response->assertSee('مدرک «گواهینامه رانندگی» منقضی شده است.');
-        $response->assertSee('پاس شد');
+        $response->assertSee('تایید');
         $response->assertSee('رد شد');
     }
 

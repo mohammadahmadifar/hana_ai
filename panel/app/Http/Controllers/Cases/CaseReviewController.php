@@ -13,6 +13,7 @@ use App\Models\Setting;
 use App\Models\User;
 use App\Services\Cases\CaseScorer;
 use App\Services\Cases\DocumentValidator;
+use App\Services\Cases\FieldDeriver;
 use App\Support\PersianValue;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\RedirectResponse;
@@ -88,7 +89,7 @@ class CaseReviewController extends Controller
 
     /** برچسب فارسی هر وضعیت بررسی. */
     public const CHECK_LABELS = [
-        'passed' => 'پاس شد',
+        'passed' => 'تایید',
         'warning' => 'مشکوک',
         'failed' => 'رد شد',
         'skipped' => 'بررسی نشد',
@@ -97,6 +98,7 @@ class CaseReviewController extends Controller
     public function __construct(
         private readonly DocumentValidator $validator,
         private readonly CaseScorer $scorer,
+        private readonly FieldDeriver $deriver,
     ) {}
 
     // ==================================================================
@@ -502,6 +504,7 @@ class CaseReviewController extends Controller
 
             $value = trim((string) ($row?->normalized_value ?? $row?->raw_value ?? ''));
             $manual = $row?->source === 'manual';
+            $derived = $row?->source === FieldDeriver::SOURCE;
 
             $out[] = [
                 'key' => (string) $field->key,
@@ -514,7 +517,12 @@ class CaseReviewController extends Controller
                 'display' => $value === '' ? '' : PersianValue::toPersianDigits($value),
                 'raw' => $row?->raw_value,
                 'confidence' => $row === null ? null : round((float) $row->confidence, 1),
-                'source' => $row === null ? 'none' : ($manual ? 'manual' : 'ocr'),
+                'source' => match (true) {
+                    $row === null => 'none',
+                    $manual => 'manual',
+                    $derived => FieldDeriver::SOURCE,
+                    default => 'ocr',
+                },
                 'hint' => $this->valueTypeHint((string) $field->value_type),
             ];
         }
@@ -734,6 +742,11 @@ class CaseReviewController extends Controller
         $user = $request->user();
 
         $this->saveCorrections($case, $document, $changes, $user);
+
+        // تاریخ صدور که اصلاح شد، تاریخ انقضای محاسبه‌شده هم باید همان‌جا تازه
+        // شود (تسک ۷۲۵)؛ وگرنه کارشناس تاریخ صدور را درست می‌کرد و «منقضی شده»
+        // روی مقدارِ محاسبه‌شده از تاریخِ غلط می‌ماند.
+        $this->deriver->derive($document);
 
         // اصلاح فیلد هم تطابق بین مدارک را عوض می‌کند و هم امتیاز را؛ پس هر دو
         // مرحله دوباره اجرا می‌شوند تا کارشناس همین حالا اثر کارش را ببیند.

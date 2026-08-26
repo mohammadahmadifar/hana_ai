@@ -34,6 +34,11 @@
 
     $confidenceTone = fn (?float $c): string => $c === null ? 'bad' : ($c >= 70 ? 'ok' : ($c >= 45 ? 'warn' : 'bad'));
 
+    // پلاک فقط وقتی به شکل پلاک نشان داده می‌شود که واقعاً با الگو بخواند
+    // (تسک ۷۴۱)؛ مقدار ناخوانا در همان کادر readout آشنا می‌ماند، چون کادرِ
+    // پلاکِ نصفه‌کاره به کارشناس می‌گوید «این را خواندیم».
+    $plateParts = fn (?string $value): ?array => PersianValue::plateParts($value);
+
     $ocrStatusLabel = [
         'pending' => 'در انتظار OCR',
         'queued' => 'در صف OCR',
@@ -171,6 +176,20 @@
                                                dir="{{ $field['value_type'] === 'vin' ? 'ltr' : 'rtl' }}"
                                                autocomplete="off"
                                                placeholder="{{ $field['hint'] }}">
+
+                                        {{--
+                                            پلاک زیر ورودی هم به شکل خودش نشان داده می‌شود (تسک ۷۴۱):
+                                            کارشناس باید بتواند مقدار تایپ‌شده را با خودِ تصویر مدرک
+                                            مقایسه کند، و «۱۲ ب ۳۴۵ ایران ۶۷» در یک input راست‌چین
+                                            همان شکلی نیست که روی کارت است.
+                                        --}}
+                                        @if ($field['value_type'] === 'plate' && $plateParts($shown) !== null)
+                                            <span class="row">
+                                                <x-plate :value="$shown" size="sm" />
+                                            </span>
+                                        @endif
+                                    @elseif ($field['value_type'] === 'plate' && $plateParts($shown) !== null)
+                                        <div><x-plate :value="$shown" /></div>
                                     @else
                                         <div class="readout num">{{ $shown !== '' ? $shown : 'خوانده نشد' }}</div>
                                     @endif
@@ -184,6 +203,10 @@
                                             @if ($field['row']?->corrected_at)
                                                 <x-jdate :value="$field['row']->corrected_at" time class="faint" />
                                             @endif
+                                        @elseif ($field['source'] === 'derived')
+                                            {{-- تسک ۷۲۵: تاریخی که روی مدرک چاپ نشده و از فیلد دیگری درآمده --}}
+                                            <x-badge tone="info" label="◷ محاسبه‌شده" />
+                                            <span class="faint">از تاریخ صدور + ۱۰ سال — روی مدرک چاپ نشده است.</span>
                                         @elseif ($field['source'] === 'ocr')
                                             <x-badge tone="info" label="OCR" />
                                             <span class="faint">اطمینان</span>

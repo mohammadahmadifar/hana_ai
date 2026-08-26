@@ -24,7 +24,7 @@
         <h2>دلایل — چه بررسی شد و نتیجه چه بود</h2>
         <div class="spacer"></div>
         <span class="tiny faint">
-            <x-num :value="$checkTotals['passed']" /> پاس ·
+            <x-num :value="$checkTotals['passed']" /> تایید ·
             <x-num :value="$checkTotals['warning']" /> مشکوک ·
             <x-num :value="$checkTotals['failed']" /> رد ·
             <x-num :value="$checkTotals['skipped']" /> بررسی‌نشده
