@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Tests\Concerns\BuildsCases;
 use Tests\TestCase;
 
@@ -229,6 +230,35 @@ class UserManagementTest extends TestCase
             User::query()->whereNull('national_id')->count(),
             'هیچ حسابی نباید بدون کد ملی ساخته شود؛ چنین حسابی هرگز وارد نمی‌شود.',
         );
+    }
+
+    /**
+     * خطِ خالیِ «SEED_PASSWORD=» نباید حساب‌ها را با رمز خالی بسازد.
+     *
+     * env() برای مقدار خالی رشتهٔ «» برمی‌گرداند نه null، پس ?? پیش‌فرض را
+     * رد می‌کرد و هر چهار حساب نمونه رمز خالی می‌گرفتند — و چون فرم ورود رمز
+     * را اجباری می‌داند، نصبِ تازه بی‌سروصدا قفل می‌شد.
+     */
+    public function test_empty_seed_password_falls_back_to_the_default(): void
+    {
+        putenv('SEED_PASSWORD=');
+        $_ENV['SEED_PASSWORD'] = '';
+        $_SERVER['SEED_PASSWORD'] = '';
+
+        try {
+            $this->seed(\Database\Seeders\DatabaseSeeder::class);
+
+            $admin = User::query()->where('national_id', '0011111119')->firstOrFail();
+
+            $this->assertFalse(
+                Hash::check('', $admin->password),
+                'رمز خالی یعنی حسابی که هرگز نمی‌تواند وارد شود.',
+            );
+            $this->assertTrue(Hash::check('hana@1405', $admin->password));
+        } finally {
+            putenv('SEED_PASSWORD');
+            unset($_ENV['SEED_PASSWORD'], $_SERVER['SEED_PASSWORD']);
+        }
     }
 
     /** @return array<string, string> */

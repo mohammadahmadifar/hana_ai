@@ -261,7 +261,8 @@ class DemoCasesSeeder extends Seeder
             'name' => 'کارشناس نمونه',
             'email' => 'demo.expert@hana.local',
             'national_id' => '0055555551',
-            'password' => Hash::make(env('SEED_PASSWORD', 'hana@1405')),
+            // ?: نه ?? — «SEED_PASSWORD=» خالی مقدار «» می‌دهد نه null (DatabaseSeeder)
+            'password' => Hash::make(env('SEED_PASSWORD') ?: 'hana@1405'),
             'role' => 'expert',
             'is_active' => true,
         ])->save();
