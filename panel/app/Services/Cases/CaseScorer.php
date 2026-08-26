@@ -54,12 +54,16 @@ final class CaseScorer
      *
      * unread_required_holds: آیا فیلد اجباریِ خوانده‌نشده جلوی **تایید خودکار**
      * را بگیرد؟ پیش‌فرض «بله». رد نمی‌کند — فقط نگه می‌دارد؛ توضیحش در decide().
+     *
+     * expired_rejects: آیا مدرکِ منقضی به‌تنهایی پرونده را رد کند؟ پیش‌فرض
+     * «بله» — دلیلش در توضیح decide() آمده.
      */
     public const DEFAULT_THRESHOLDS = [
         'approve_at' => 80.0,
         'reject_below' => 45.0,
         'cross_fail_rejects' => true,
         'unread_required_holds' => true,
+        'expired_rejects' => true,
     ];
 
     /**
@@ -206,7 +210,7 @@ final class CaseScorer
     /**
      * آستانه‌های تصمیم از تنظیمات.
      *
-     * @return array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool}
+     * @return array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool, expired_rejects: bool}
      */
     public static function thresholds(): array
     {
@@ -232,11 +236,16 @@ final class CaseScorer
             ? filter_var($stored['unread_required_holds'], FILTER_VALIDATE_BOOLEAN)
             : (bool) self::DEFAULT_THRESHOLDS['unread_required_holds'];
 
+        $expiredVeto = array_key_exists('expired_rejects', $stored)
+            ? filter_var($stored['expired_rejects'], FILTER_VALIDATE_BOOLEAN)
+            : (bool) self::DEFAULT_THRESHOLDS['expired_rejects'];
+
         return [
             'approve_at' => $approve,
             'reject_below' => $reject,
             'cross_fail_rejects' => $crossVeto,
             'unread_required_holds' => $unreadHolds,
+            'expired_rejects' => $expiredVeto,
         ];
     }
 
@@ -284,11 +293,18 @@ final class CaseScorer
      * همین قاعده روی «ضعیف‌ترینِ» یادداشت هم اعمال می‌شود تا یک یادداشت دو
      * معیار متضاد را کنار هم نگذارد.
      *
+     * فیلدِ محاسبه‌شده (source=derived، تسک ۷۲۵) اصلاً وارد این میانگین نمی‌شود:
+     * این مؤلفه می‌سنجد «موتور چقدر خوب خواند» و مقدار محاسبه‌شده خوانده نشده
+     * است. اطمینانش رونوشتِ اطمینان همان فیلدِ مبدأ است، پس واردکردنش یعنی یک
+     * خواندن دو بار در میانگین بنشیند — و بدتر، «ضعیف‌ترین فیلد» می‌توانست
+     * تاریخ انقضایی را نام ببرد که اصلاً روی مدرک چاپ نشده و کارشناس بی‌جهت
+     * دنبالش بگردد.
+     *
      * @return array{key: string, value: float, note: string}
      */
     private function ocrQuality(PermitCase $case): array
     {
-        $fields = $case->extractedFields;
+        $fields = $case->extractedFields->where('source', '!=', FieldDeriver::SOURCE);
 
         if ($fields->isEmpty()) {
             return [
@@ -528,7 +544,22 @@ final class CaseScorer
      * کارشناس می‌رود تا مقدار را از روی تصویر بخواند و دستی وارد کند. هرگز رد
      * نمی‌شود. مدیر می‌تواند در «تنظیمات امتیازدهی» خاموشش کند.
      *
-     * @param  array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool}  $thresholds
+     * ── چرا «مدرک منقضی» مستقل از امتیاز رد می‌کند (تسک ۷۳۸) ──────────────
+     *
+     * انقضا مثل کیفیت تصویر یک سنجهٔ درجه‌دار نیست؛ یک واقعیت دو‌حالته است.
+     * مدرکی که تاریخش گذشته با هیچ مقدار خوانایی و هیچ تطابق بین‌مدرکی جبران
+     * نمی‌شود: پروندهٔ سالمی که فقط گواهینامه‌اش منقضی است بقیهٔ مؤلفه‌ها را
+     * کامل می‌گیرد و بالای آستانهٔ تایید می‌نشیند — یعنی مجوز حمل‌ونقل با
+     * گواهینامهٔ باطل. پس مثل ناهمخوانی بین مدارک، وتوی مستقل از امتیاز است.
+     *
+     * تفاوت با ناهمخوانی: ردیف «مشکوک» رد نمی‌کند. وقتی تاریخ با اطمینان
+     * پایین خوانده شده، DocumentValidator عمداً `warning` می‌نویسد نه `failed`
+     * — همان قاعدهٔ کلی پروژه که نمی‌گذارد خطای OCR ما به «مدرک منقضی» ترجمه
+     * شود. ولی تایید خودکار هم روی چنین پرونده‌ای انجام نمی‌شود: به کارشناس
+     * می‌رود تا تاریخ را از روی تصویر بخواند. مدیر می‌تواند کل این رفتار را در
+     * «تنظیمات امتیازدهی» خاموش کند.
+     *
+     * @param  array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool, expired_rejects: bool}  $thresholds
      * @param  list<array<string, mixed>>  $rows
      * @return array{0: string, 1: string}
      */
@@ -551,7 +582,34 @@ final class CaseScorer
             ];
         }
 
+        if ($thresholds['expired_rejects']) {
+            $expired = $this->expiryRows($case, 'failed');
+
+            if ($expired->isNotEmpty()) {
+                return ['rejected',
+                    'مدرک منقضی: '.$this->failureSummary($expired)
+                    .' اعتبار زمانی مدرک با کیفیت خوبِ بقیهٔ مؤلفه‌ها جبران نمی‌شود، پس پرونده مستقل از '
+                    .$scoreText.' رد شد. متقاضی باید مدرک معتبر ارائه کند. '
+                    .'(این رفتار در «تنظیمات امتیازدهی» قابل تغییر است.)',
+                ];
+            }
+        }
+
         if ($score >= $thresholds['approve_at']) {
+            $suspectExpired = $thresholds['expired_rejects']
+                ? $this->expiryRows($case, 'warning')
+                : collect();
+
+            if ($suspectExpired->isNotEmpty()) {
+                return ['needs_review',
+                    $scoreText.' به دست آمد که از آستانهٔ تایید ('.$approveText.') کمتر نیست، ولی '
+                    .'اعتبار زمانی مدرک قطعی نیست: '.$this->failureSummary($suspectExpired)
+                    .' تاریخ با اطمینان پایین خوانده شده، پس نه رد می‌شود نه خودکار تایید؛ '
+                    .'کارشناس تاریخ را از روی تصویر بخواند و بعد تصمیم بگیرد. '
+                    .'(این رفتار در «تنظیمات امتیازدهی» قابل تغییر است.)',
+                ];
+            }
+
             $unread = $thresholds['unread_required_holds'] ? $this->unreadRequired($case) : [];
 
             if ($unread !== []) {
@@ -582,6 +640,25 @@ final class CaseScorer
             .') است، پس تصمیم به کارشناس واگذار شد و ممکن است مدارک بیشتری لازم باشد. '
             .$this->driverText($rows),
         ];
+    }
+
+    /**
+     * ردیف‌های «اعتبار زمانی مدرک» با وضعیت خواسته‌شده.
+     *
+     * روی ردیف‌هایی که DocumentValidator از قبل نوشته کار می‌کند، پس نه کوئری
+     * تازه‌ای زده می‌شود نه قاعدهٔ انقضا دوباره پیاده. پیشوند `document.expired.`
+     * هفده نویسه است و از بریدنِ clipRuleKey() جان سالم به در می‌برد — برخلاف
+     * تجزیهٔ خودِ کلید که برای نوعِ مدرکِ بلندنام جور درنمی‌آید.
+     *
+     * @return Collection<int, \App\Models\ValidationResult>
+     */
+    private function expiryRows(PermitCase $case, string $status): Collection
+    {
+        return $case->validationResults
+            ->where('scope', 'document')
+            ->where('status', $status)
+            ->filter(fn ($row): bool => str_starts_with((string) $row->rule_key, 'document.expired.'))
+            ->values();
     }
 
     /**

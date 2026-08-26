@@ -9,6 +9,7 @@
 
     $crossVeto = (bool) old('cross_fail_rejects', $thresholds['cross_fail_rejects']);
     $unreadHold = (bool) old('unread_required_holds', $thresholds['unread_required_holds'] ?? true);
+    $expiredVeto = (bool) old('expired_rejects', $thresholds['expired_rejects'] ?? true);
     $approveNow = (float) $shown('approve_at', $thresholds['approve_at']);
     $rejectNow = (float) $shown('reject_below', $thresholds['reject_below']);
 @endphp
@@ -226,6 +227,26 @@
                     </span>
                 </div>
 
+                <div class="field">
+                    <span class="label">مدرک منقضی</span>
+                    <input type="hidden" name="expired_rejects" value="0">
+                    <label class="check">
+                        <input type="checkbox" name="expired_rejects" value="1" @checked($expiredVeto)>
+                        <span>پرونده‌ای که تاریخ انقضای یکی از مدارکش گذشته، مستقل از امتیاز رد شود</span>
+                    </label>
+                    <span class="hint">
+                        انقضا یک واقعیت دوحالته است، نه سنجه‌ای درجه‌دار: مدرکی که تاریخش گذشته با کیفیت
+                        خوبِ تصویر و تطابق کامل بین مدارک جبران نمی‌شود. بدون این تیک، پروندهٔ سالمی که
+                        فقط گواهینامه‌اش باطل شده بالای آستانهٔ تایید می‌نشیند و خودکار تایید می‌شود.
+                        تاریخی که با اطمینان پایین خوانده شده هرگز رد نمی‌شود؛ آن پرونده فقط به کارشناس
+                        می‌رود تا تاریخ را از روی تصویر بخواند.
+                        @if (($impact['expired'] ?? 0) > 0)
+                            <strong>هم‌اکنون <x-num :value="$impact['expired']" /> پرونده مدرک منقضیِ
+                            ثبت‌شده دارد.</strong>
+                        @endif
+                    </span>
+                </div>
+
             </div>
             <div class="card__foot">
                 <div class="row row--end">
@@ -276,7 +297,8 @@
                                 تایید از <x-num :value="$thresholds['approve_at']" /> به بالا،
                                 رد زیر <x-num :value="$thresholds['reject_below'] " />،
                                 رد خودکار ناهمخوانی: {{ $thresholds['cross_fail_rejects'] ? 'فعال' : 'غیرفعال' }}،
-                                نگه‌داشتن فیلد اجباریِ خوانده‌نشده: {{ ($thresholds['unread_required_holds'] ?? true) ? 'فعال' : 'غیرفعال' }}
+                                نگه‌داشتن فیلد اجباریِ خوانده‌نشده: {{ ($thresholds['unread_required_holds'] ?? true) ? 'فعال' : 'غیرفعال' }}،
+                                رد خودکار مدرک منقضی: {{ ($thresholds['expired_rejects'] ?? true) ? 'فعال' : 'غیرفعال' }}
                             </td>
                             <td>{{ $thresholdsMeta['user'] ?? '— (مقدار اولیهٔ سامانه)' }}</td>
                             <td><x-jdate :value="$thresholdsMeta['at']" time /></td>

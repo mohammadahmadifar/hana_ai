@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\ExtractedField;
 use App\Models\PermitCase;
 use App\Models\Setting;
+use App\Models\ValidationResult;
 use App\Services\Cases\CaseScorer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
@@ -82,6 +83,12 @@ class ScoringSettingsTest extends TestCase
         $this->assertSame(70.0, (float) Setting::get('scoring.thresholds')['approve_at']);
         $this->assertSame(30.0, (float) Setting::get('scoring.thresholds')['reject_below']);
         $this->assertSame(40.0, (float) Setting::get('scoring.penalties')['failed']);
+
+        // سه نگهبانِ تصمیم هم باید همراه عددها ذخیره شوند، وگرنه ذخیرهٔ فرم
+        // بی‌صدا خاموششان می‌کند.
+        $this->assertTrue(Setting::get('scoring.thresholds')['cross_fail_rejects']);
+        $this->assertTrue(Setting::get('scoring.thresholds')['unread_required_holds']);
+        $this->assertTrue(Setting::get('scoring.thresholds')['expired_rejects']);
 
         // موتور امتیازدهی همین مقدارها را می‌خواند، نه چیز دیگری.
         $this->assertSame(50.0, CaseScorer::weights()['validation']);
@@ -191,6 +198,47 @@ class ScoringSettingsTest extends TestCase
         $this->assertEqualsWithDelta($score, (float) $case->confidence_score, 0.01);
     }
 
+    /**
+     * وتوی «مدرک منقضی» از روی همین صفحه خاموش و روشن می‌شود (تسک ۷۳۸).
+     *
+     * و شمارِ اثر روی صفحه هم باید همان پرونده را ببیند، وگرنه مدیر تیک را
+     * برمی‌دارد بی‌آنکه بداند روی چند پرونده اثر گذاشته.
+     */
+    public function test_expiry_veto_can_be_switched_off_from_the_page(): void
+    {
+        $admin = $this->adminUser();
+        $case = $this->cleanCase();
+
+        ValidationResult::create([
+            'case_id' => $case->id,
+            'rule_key' => 'document.expired.driving_license',
+            'scope' => 'document',
+            'status' => 'failed',
+            'message_fa' => 'مدرک «گواهینامه رانندگی» منقضی شده است.',
+        ]);
+
+        app(CaseScorer::class)->score($case = $case->fresh());
+        $case->refresh();
+
+        $this->assertSame('rejected', $case->decision);
+
+        // صفحه باید بگوید این وتو الان روی یک پرونده اثر دارد.
+        $this->actingAs($admin)
+            ->get(route('admin.settings.scoring'))
+            ->assertOk()
+            ->assertSee('پرونده مدرک منقضیِ', false);
+
+        // مدیر تیک را برمی‌دارد → همان پرونده دیگر خودکار رد نمی‌شود.
+        $this->actingAs($admin)
+            ->put(route('admin.settings.scoring.update'), $this->payload(['expired_rejects' => '0']))
+            ->assertSessionHasNoErrors();
+
+        app(CaseScorer::class)->score($case = $case->fresh());
+        $case->refresh();
+
+        $this->assertNotSame('rejected', $case->decision);
+    }
+
     // ——— ابزار داخلی تست ———
 
     /** بدنهٔ معتبر فرم؛ هر تست فقط همان چیزی را که می‌خواهد بشکند جایگزین می‌کند. */
@@ -202,6 +250,8 @@ class ScoringSettingsTest extends TestCase
             'reject_below' => 45,
             'penalties' => ['failed' => 25, 'warning' => 8],
             'cross_fail_rejects' => '1',
+            'unread_required_holds' => '1',
+            'expired_rejects' => '1',
         ], $overrides);
     }
 

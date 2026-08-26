@@ -140,6 +140,85 @@ class CaseScorerTest extends TestCase
         );
     }
 
+    /** مدرک منقضی: تاریخ با اطمینان بالا خوانده شده و گذشته → رد، مستقل از امتیاز. */
+    public function test_expired_document_is_rejected_even_with_high_score(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+        $this->fillRequiredFields($case, 95.0);
+        $this->addResult(
+            $case,
+            'document.expired.driving_license',
+            'document',
+            'failed',
+            'مدرک «گواهینامه رانندگی» منقضی شده است: «تاریخ انقضا» برابر ۱۳۹۵/۰۴/۱۲ است.',
+        );
+
+        $case = $this->runScorer($case);
+
+        $this->assertSame('rejected', $case->decision);
+        $this->assertSame('rejected', $case->status);
+        $this->assertStringContainsString('مدرک منقضی', $case->decision_reason);
+        $this->assertStringContainsString('گواهینامه رانندگی', $case->decision_reason);
+
+        // همان نکتهٔ وتوی ناهمخوانی: امتیاز هنوز بالای آستانهٔ تایید است و
+        // چیزی که پرونده را رد کرد، انقضا بود نه عدد.
+        $this->assertGreaterThan(80.0, (float) $case->confidence_score);
+    }
+
+    /** همان پروندهٔ منقضی، با خاموش‌کردن وتو در تنظیمات → دیگر خودکار رد نمی‌شود. */
+    public function test_expiry_veto_is_configurable(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+        $this->fillRequiredFields($case, 95.0);
+        $this->addResult(
+            $case,
+            'document.expired.driving_license',
+            'document',
+            'failed',
+            'مدرک «گواهینامه رانندگی» منقضی شده است.',
+        );
+
+        Setting::put('scoring.thresholds', array_merge(
+            CaseScorer::DEFAULT_THRESHOLDS,
+            ['expired_rejects' => false],
+        ));
+
+        $case = $this->runScorer($case);
+
+        // با خاموش بودن وتو، انقضا فقط از راه مؤلفهٔ اعتبارسنجی امتیاز کم می‌کند.
+        $this->assertNotSame('rejected', $case->decision);
+        $this->assertLessThan(
+            100.0,
+            (float) $case->scoreComponents()->where('component_key', 'validation')->value('value'),
+        );
+    }
+
+    /**
+     * تاریخِ کم‌اطمینان رد نمی‌کند، ولی خودکار هم تایید نمی‌شود.
+     *
+     * DocumentValidator برای «به‌نظر می‌رسد منقضی شده» عمداً warning می‌نویسد نه
+     * failed؛ ترجمهٔ آن به «رد» یعنی جریمهٔ متقاضی بابت محدودیت OCR ما. ولی
+     * تایید خودکارش هم یعنی صدور مجوز با تاریخی که هیچ‌کس نخوانده.
+     */
+    public function test_low_confidence_expiry_holds_case_for_human_review(): void
+    {
+        $case = $this->makeCaseWithDocuments('issue');
+        $this->fillRequiredFields($case, 95.0);
+        $this->addResult(
+            $case,
+            'document.expired.driving_license',
+            'document',
+            'warning',
+            'به‌نظر می‌رسد «گواهینامه رانندگی» منقضی شده باشد، ولی تاریخ با اطمینان پایین خوانده شده.',
+        );
+
+        $case = $this->runScorer($case);
+
+        $this->assertSame('needs_review', $case->decision);
+        $this->assertSame('needs_review', $case->status);
+        $this->assertStringContainsString('اعتبار زمانی مدرک قطعی نیست', $case->decision_reason);
+    }
+
     /** آستانه‌ها هاردکد نیستند: با تغییر تنظیمات، تصمیمِ همان پرونده عوض می‌شود. */
     public function test_decision_follows_thresholds_from_settings(): void
     {

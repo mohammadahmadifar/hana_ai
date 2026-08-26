@@ -87,6 +87,7 @@ class SettingsController extends Controller
             'reject_below' => (float) $data['reject_below'],
             'cross_fail_rejects' => $request->boolean('cross_fail_rejects'),
             'unread_required_holds' => $request->boolean('unread_required_holds'),
+            'expired_rejects' => $request->boolean('expired_rejects'),
         ];
 
         $newPenalties = [
@@ -243,48 +244,80 @@ class SettingsController extends Controller
     /**
      * این آستانه‌ها الان روی چند پروندهٔ امتیازخورده اثر دارند؟
      *
-     * @param  array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool}  $thresholds
+     * @param  array{approve_at: float, reject_below: float, cross_fail_rejects: bool, unread_required_holds: bool, expired_rejects: bool}  $thresholds
      * @return array<string, int>
      */
     private function impact(array $thresholds): array
     {
         $scored = PermitCase::query()->whereNotNull('confidence_score');
 
+        // دو شرطِ ردیف اعتبارسنجی که تصمیم را از عدد جدا می‌کنند. هر دو دقیقاً
+        // همان چیزی را می‌پرسند که CaseScorer::decide() می‌پرسد.
+        $unreadRows = fn ($query) => $query
+            ->where('scope', 'document')
+            ->where('rule_key', 'like', 'document.missing_required.%')
+            // skipped هم هست: یعنی مدرک اجباری اصلاً نیامده — همان حالتی که
+            // جریمهٔ اعتبارسنجی نمی‌گیرد و بدون نگهبان خودکار تایید می‌شد.
+            ->whereIn('status', ['failed', 'warning', 'skipped']);
+
+        $expiredRows = fn ($query) => $query
+            ->where('scope', 'document')
+            ->where('status', 'failed')
+            ->where('rule_key', 'like', 'document.expired.%');
+
         $total = (clone $scored)->count();
-        $approve = (clone $scored)->where('confidence_score', '>=', $thresholds['approve_at'])->count();
-        $reject = (clone $scored)->where('confidence_score', '<', $thresholds['reject_below'])->count();
 
         // پروندهٔ بالای آستانه که دادهٔ اجباریِ دیده‌نشده دارد تایید خودکار
-        // نمی‌شود (CaseScorer::decide). بدون این کسر، همین صفحه — که تنها جای
-        // دیدنِ اثرِ تنظیمات است — تعداد تایید خودکار را بیشتر از واقعیت نشان
-        // می‌داد.
+        // نمی‌شود، و پروندهٔ دارای مدرک منقضی اصلاً رد می‌شود
+        // (CaseScorer::decide). بدون این دو کسر، همین صفحه — که تنها جای دیدنِ
+        // اثرِ تنظیمات است — تعداد تایید خودکار را بیشتر از واقعیت نشان می‌داد.
         //
-        // عدد **تقریبی** است و متن صفحه هم «حدود» می‌گوید: این کوئری شرطِ
-        // «آیا خدمتِ این پرونده آن مدرک را اجباری کرده؟» را ندارد، چون آن
+        // کسر با whereDoesntHave انجام می‌شود نه با تفریقِ دو شمارش، چون یک
+        // پرونده می‌تواند هم‌زمان هر دو ایراد را داشته باشد و آن‌وقت دو بار از
+        // «تایید» کم می‌شد.
+        //
+        // عدد **تقریبی** است و متن صفحه هم «حدود» می‌گوید: این کوئری‌ها شرطِ
+        // «آیا خدمتِ این پرونده آن مدرک را اجباری کرده؟» را ندارند، چون آن
         // شرط روی پیوت است و آوردنش به SQL این پرس‌وجوی نمایشی را چند برابر
         // گران می‌کند. تصمیم واقعی همیشه با CaseScorer است، نه با این عدد.
-        $held = 0;
+        $approve = (clone $scored)
+            ->where('confidence_score', '>=', $thresholds['approve_at'])
+            ->when($thresholds['unread_required_holds'],
+                fn ($query) => $query->whereDoesntHave('validationResults', $unreadRows))
+            ->when($thresholds['expired_rejects'],
+                fn ($query) => $query->whereDoesntHave('validationResults', $expiredRows))
+            ->count();
 
-        if ($thresholds['unread_required_holds']) {
-            $held = (clone $scored)
+        // مدرک منقضی مستقل از امتیاز رد می‌کند (تسک ۷۳۸)، پس شرطش با «یا» کنار
+        // آستانهٔ رد می‌نشیند — نه جمعِ دو شمارش، که پروندهٔ کم‌امتیازِ منقضی را
+        // دو بار می‌شمرد.
+        $reject = (clone $scored)
+            ->where(function ($query) use ($thresholds, $expiredRows): void {
+                $query->where('confidence_score', '<', $thresholds['reject_below']);
+
+                if ($thresholds['expired_rejects']) {
+                    $query->orWhereHas('validationResults', $expiredRows);
+                }
+            })
+            ->count();
+
+        $held = $thresholds['unread_required_holds']
+            ? (clone $scored)
                 ->where('confidence_score', '>=', $thresholds['approve_at'])
-                ->whereHas('validationResults', fn ($query) => $query
-                    ->where('scope', 'document')
-                    ->where('rule_key', 'like', 'document.missing_required.%')
-                    // skipped هم هست: یعنی مدرک اجباری اصلاً نیامده — همان
-                    // حالتی که جریمهٔ اعتبارسنجی نمی‌گیرد و بدون نگهبان
-                    // خودکار تایید می‌شد.
-                    ->whereIn('status', ['failed', 'warning', 'skipped']))
-                ->count();
+                ->whereHas('validationResults', $unreadRows)
+                ->count()
+            : 0;
 
-            $approve = max(0, $approve - $held);
-        }
+        $expired = $thresholds['expired_rejects']
+            ? (clone $scored)->whereHas('validationResults', $expiredRows)->count()
+            : 0;
 
         return [
             'total' => $total,
             'approved' => $approve,
             'rejected' => $reject,
             'held_unread' => $held,
+            'expired' => $expired,
             'needs_review' => max(0, $total - $approve - $reject),
             'cross_failed' => PermitCase::query()
                 ->whereHas('validationResults', fn ($query) => $query
@@ -322,6 +355,7 @@ class SettingsController extends Controller
             'penalties.warning' => 'جریمهٔ هر هشدار',
             'cross_fail_rejects' => 'رد خودکار پروندهٔ ناهمخوان',
             'unread_required_holds' => 'نگه‌داشتن پروندهٔ دارای فیلد اجباریِ خوانده‌نشده',
+            'expired_rejects' => 'رد خودکار پروندهٔ دارای مدرک منقضی',
         ];
     }
 }

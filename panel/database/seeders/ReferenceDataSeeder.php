@@ -185,6 +185,10 @@ class ReferenceDataSeeder extends Seeder
                     // فیلد اجباریِ خوانده‌نشده جلوی تایید خودکار را می‌گیرد
                     // (رد نمی‌کند) — CaseScorer::decide()
                     'unread_required_holds' => true,
+                    // مدرکی که تاریخ انقضایش گذشته، مستقل از امتیاز پرونده را رد
+                    // می‌کند (تسک ۷۳۸). تاریخِ کم‌اطمینان رد نمی‌کند، فقط جلوی
+                    // تایید خودکار را می‌گیرد — CaseScorer::decide()
+                    'expired_rejects' => true,
                 ]],
             ],
 
