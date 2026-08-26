@@ -1,6 +1,10 @@
 {{--
     تصمیم نهایی کارشناس.
-    ورودی: $case، $reviewable
+    ورودی: $case، $reviewable، $canReview
+
+    $reviewable  = پرونده از «پیش‌نویس» گذشته و چیزی برای تصمیم هست.
+    $canReview   = این کاربر اجازهٔ تصمیم دارد. متقاضی همین کارت را می‌بیند
+                   ولی فقط نتیجه و دلیلش را، بدون فرم.
 
     نکتهٔ قراردادی: تصمیم انسانی پرچم decision_is_manual را می‌گذارد و از آن
     لحظه CaseScorer دیگر تصمیم را بازنویسی نمی‌کند (امتیاز به‌روز می‌شود ولی
@@ -9,6 +13,10 @@
 --}}
 @php
     use App\Support\PersianValue;
+
+    // پیش‌فرض true تا هر include قدیمی که این کلید را نمی‌فرستد رفتار قبلی را
+    // داشته باشد؛ صفحهٔ نتیجه صریحاً مقدارش را می‌دهد.
+    $canReview = $canReview ?? true;
 
     $decisionTone = [
         'approved' => 'ok',
@@ -60,6 +68,17 @@
                 <div class="alert__body">
                     <strong>این پرونده هنوز «پیش‌نویس» است.</strong>
                     <span>تا وقتی مدارک کامل و پرونده ثبت نشده باشد، چیزی برای تصمیم‌گیری وجود ندارد.</span>
+                </div>
+            </div>
+        @elseif (! $canReview)
+            <div class="alert alert--info" role="status">
+                <span class="alert__icon" aria-hidden="true">👤</span>
+                <div class="alert__body">
+                    <strong>تصمیم‌گیری روی این پرونده با کارشناس بررسی است.</strong>
+                    <span>
+                        شما نتیجه و دلیلش را می‌بینید ولی نمی‌توانید مقدار فیلدها یا تصمیم را عوض کنید.
+                        اگر مقداری اشتباه خوانده شده، مدرک واضح‌تری بارگذاری کنید.
+                    </span>
                 </div>
             </div>
         @else

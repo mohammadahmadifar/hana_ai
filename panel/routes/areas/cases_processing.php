@@ -13,11 +13,13 @@ use Illuminate\Support\Facades\Route;
 | ثانیه این را می‌خواند؛ دقیقاً همان الگوی dataset.generate.status.
 |
 | نام روت: cases.processing.status   →   GET /cases/{case}/processing/status
-| دسترسی: همان دسترسی بقیهٔ پرونده‌ها (مدیر سامانه و کارشناس)؛ مالکیت پرونده
-| داخل کنترلر بررسی می‌شود، پس کارشناس پروندهٔ دیگری را نمی‌بیند.
+| دسترسی: همان دسترسی بقیهٔ پرونده‌ها (مدیر سامانه، کارشناس و متقاضی)؛ مالکیت
+| پرونده داخل کنترلر بررسی می‌شود، پس هیچ‌کس جز مدیر سامانه پروندهٔ دیگری را
+| نمی‌بیند. متقاضی هم این اندپوینت را لازم دارد: صفحهٔ نتیجهٔ پروندهٔ خودش
+| تا پایان پردازش همین را می‌خواند.
 */
 
-Route::middleware(['auth', 'role:admin,expert'])
+Route::middleware(['auth', 'role:admin,expert,applicant'])
     ->prefix('cases')
     ->name('cases.processing.')
     ->group(function (): void {

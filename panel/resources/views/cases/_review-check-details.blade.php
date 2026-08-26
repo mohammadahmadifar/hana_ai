@@ -25,7 +25,11 @@
         'unread' => ['tone' => 'info', 'label' => 'خوانده نشد'],
     ];
 
-    $sourceLabel = fn (?string $s): string => $s === 'manual' ? 'اصلاح کارشناس' : 'OCR';
+    $sourceLabel = fn (?string $s): string => match ($s) {
+        'manual' => 'اصلاح کارشناس',
+        'derived' => 'محاسبه‌شده',
+        default => 'OCR',
+    };
 
     // تطابق بین مدارک: مرجع + هر چیزی که با آن مقایسه شده
     $reference = is_array($d['reference'] ?? null) ? $d['reference'] : null;

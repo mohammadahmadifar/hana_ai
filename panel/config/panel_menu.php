@@ -117,7 +117,11 @@ return [
 
         [
             'label' => 'درخواست خدمت',
-            'roles' => ['admin', 'expert'],
+            // متقاضی هم این گروه را می‌بیند، ولی فقط دو آیتم اولش؛ «صف بررسی»
+            // و «گزارش خطاها» با roles خودشان بسته شده‌اند تا آیتمی نبیند که
+            // کلیکش ۴۰۳ می‌دهد. شمارندهٔ صف هم فقط وقتی خوانده می‌شود که آیتمش
+            // دیده شود، پس متقاضی عدد پرونده‌های دیگران را هم نمی‌گیرد.
+            'roles' => ['admin', 'expert', 'applicant'],
             'items' => [
                 [
                     'route' => 'cases.create',
@@ -137,7 +141,7 @@ return [
                     'route' => 'cases.review',
                     'label' => 'صف بررسی',
                     'icon' => '🔍',
-                    'roles' => [],
+                    'roles' => ['admin', 'expert'],
                     'active' => 'cases.review*',
                     'counter' => 'cases_needs_review',
                 ],
@@ -145,8 +149,18 @@ return [
                     'route' => 'reports.index',
                     'label' => 'گزارش خطاها',
                     'icon' => '📉',
-                    'roles' => [],
+                    'roles' => ['admin', 'expert'],
                     'active' => 'reports.*',
+                ],
+                [
+                    // تسک ۷۲۶ — اندازه‌گیری دقت روی دستهٔ بزرگ تصویر مصنوعی.
+                    // فقط مدیر: هر اجرا تا هزار تصویر می‌سازد و صف را چند
+                    // دقیقه مشغول می‌کند.
+                    'route' => 'evaluation.create',
+                    'label' => 'ارزیابی دقت',
+                    'icon' => '🎯',
+                    'roles' => ['admin'],
+                    'active' => 'evaluation.*',
                 ],
             ],
         ],

@@ -135,6 +135,8 @@
                                 <td>
                                     @if ($row->source === 'manual')
                                         <x-badge tone="info" dot label="اصلاح کارشناس" />
+                                    @elseif ($row->source === 'derived')
+                                        <x-badge dot label="محاسبه‌شده" />
                                     @else
                                         <x-badge dot label="موتور" />
                                     @endif

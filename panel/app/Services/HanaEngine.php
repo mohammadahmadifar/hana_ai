@@ -237,6 +237,25 @@ class HanaEngine
         return $this->call('image_quality', ['path' => $path]);
     }
 
+    /**
+     * یک تکه از «ارزیابی دقت»: ساخت تصویر + OCR چند مدرک در یک فراخوانی.
+     *
+     * موتور این تکه را با استخر چند پروسه‌ای پردازش می‌کند، پس یک فراخوانی
+     * به‌جای «۲ × تعداد تصویر» فراخوانی می‌نشیند (تسک ۷۲۶). خروجی فقط متن است:
+     * «چه چاپ شد» و «چه خوانده شد». قضاوت دربارهٔ درستی کار پنل است، نه موتور.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return array<string, mixed>
+     */
+    public function evaluateBatch(array $items, string $outDir, int $workers = 8): array
+    {
+        return $this->call('evaluate_batch', [
+            'items' => $items,
+            'out_dir' => $outDir,
+            'workers' => $workers,
+        ]);
+    }
+
     // ------------------------------------------------------------------
 
     private function logStderr(string $command, string $stderr): void

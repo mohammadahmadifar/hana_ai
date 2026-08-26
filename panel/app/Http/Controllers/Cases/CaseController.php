@@ -8,15 +8,12 @@ use App\Models\CaseDocument;
 use App\Models\DocumentType;
 use App\Models\PermitCase;
 use App\Models\ServiceType;
-use App\Support\Jalali;
 use App\Support\PanelMenu;
 use App\Support\PersianValue;
-use Illuminate\Database\QueryException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\View\View;
-use RuntimeException;
 
 /**
  * ویزارد «درخواست خدمت» — گام یکم و سوم فلوچارت پروژه.
@@ -34,9 +31,6 @@ use RuntimeException;
  */
 class CaseController extends Controller
 {
-    /** بیشترین تلاش برای ساختن کد یکتای پرونده پیش از تسلیم‌شدن. */
-    private const CODE_ATTEMPTS = 10;
-
     // ==================================================================
     // فهرست پرونده‌ها
     // ==================================================================
@@ -322,69 +316,19 @@ class CaseController extends Controller
      * تلاش می‌شود. سه تلاش نخست شمارهٔ پشت‌سرهم می‌گیرد (برای انسان خواناست)
      * و بعد از آن شمارهٔ تصادفی، تا حلقه روی یک تصادف پرترافیک گیر نکند.
      */
+    /**
+     * ساخت پروندهٔ پیش‌نویس — منطقش روی مدل است (PermitCase::openDraft).
+     *
+     * چرا این‌جا نیست: همان کد را دکمهٔ «بفرست به فرایند بررسی» صفحهٔ تصویر
+     * تستی هم لازم دارد و الگوی کد پرونده نباید دو جا نوشته شود.
+     */
     private function createCase(
         int $userId,
         int $serviceTypeId,
         ?string $applicantName,
         ?string $applicantNationalId,
     ): PermitCase {
-        $year = $this->currentJalaliYear();
-
-        for ($attempt = 1; $attempt <= self::CODE_ATTEMPTS; $attempt++) {
-            try {
-                return PermitCase::create([
-                    'code' => $this->candidateCode($year, $attempt),
-                    'user_id' => $userId,
-                    'service_type_id' => $serviceTypeId,
-                    'applicant_name' => $applicantName,
-                    'applicant_national_id' => $applicantNationalId,
-                    'status' => 'draft',
-                ]);
-            } catch (QueryException $exception) {
-                if ($attempt === self::CODE_ATTEMPTS || ! $this->isDuplicateKey($exception)) {
-                    throw $exception;
-                }
-            }
-        }
-
-        // عملاً دست‌نیافتنی؛ فقط برای اینکه تحلیل ایستا خروجی قطعی ببیند.
-        throw new RuntimeException('ساخت کد یکتای پرونده ممکن نشد.');
-    }
-
-    /** الگوی کد: HA-{سال شمسی}-{شش رقم} */
-    private function candidateCode(int $year, int $attempt): string
-    {
-        $prefix = 'HA-'.$year.'-';
-
-        if ($attempt <= 3) {
-            // کدها صفرِ ابتدایی دارند، پس بزرگ‌ترین رشته همان بزرگ‌ترین عدد است.
-            $last = PermitCase::query()
-                ->where('code', 'like', $prefix.'%')
-                ->max('code');
-
-            $serial = is_string($last)
-                ? ((int) mb_substr($last, mb_strlen($prefix))) + 1
-                : 1;
-        } else {
-            $serial = random_int(1, 999_999);
-        }
-
-        $serial = max(1, min($serial, 999_999));
-
-        return $prefix.str_pad((string) $serial, 6, '0', STR_PAD_LEFT);
-    }
-
-    private function currentJalaliYear(): int
-    {
-        $now = now(config('panel_menu.timezone', config('app.timezone')));
-
-        return Jalali::fromGregorian((int) $now->year, (int) $now->month, (int) $now->day)[0];
-    }
-
-    /** آیا این خطا نقض قید یکتایی است (نه یک خرابی واقعی دیتابیس)؟ */
-    private function isDuplicateKey(QueryException $exception): bool
-    {
-        return (string) $exception->getCode() === '23000';
+        return PermitCase::openDraft($userId, $serviceTypeId, $applicantName, $applicantNationalId);
     }
 
     /**

@@ -81,3 +81,8 @@ panel/storage/framework/views/
 panel/storage/logs/
 panel/public/storage
 panel/.phpunit.result.cache
+
+# ---------------------------------------------
+# ویدیوهای رندرشدهٔ سناریوها (خروجی آزمایشگاه تست، نه سورس)
+# ---------------------------------------------
+docs/videos/

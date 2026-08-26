@@ -2,6 +2,10 @@ from faker import Faker
 import random
 import jdatetime
 
+
+# اعتبار گواهینامهٔ رانندگی از تاریخ صدور، به سال شمسی (تسک ۷۲۵).
+LICENSE_VALIDITY_YEARS = 10
+
 fake = Faker("fa_IR")
 
 
@@ -196,19 +200,39 @@ def generate_national_card_expire():
 
 # -------------------------------------
 
-def generate_license_expire_date():
+def generate_license_expire_date(
+        issue_date
+):
 
-    today = jdatetime.date.today()
+    # اعتبار گواهینامهٔ رانندگی از تاریخ صدور ده سال است، نه یک عدد تصادفی.
+    # پیش از تسک ۷۲۵ این تاریخ مستقل از تاریخ صدور قرعه‌کشی می‌شد و شخصِ
+    # مصنوعی می‌توانست گواهینامه‌ای داشته باشد که ۱۳۸۵ صادر و ۱۴۱۲ منقضی
+    # می‌شود. قالب گواهینامه این فیلد را چاپ نمی‌کند، پس پنل هم همین قاعده
+    # را روی تاریخ صدورِ خوانده‌شده می‌گذارد (App\Services\Cases\FieldDeriver).
 
-    return jdatetime.date(
+    year = issue_date.year + LICENSE_VALIDITY_YEARS
 
-        today.year + random.randint(1, 10),
+    day = issue_date.day
 
-        random.randint(1, 12),
+    # ۳۰ اسفندِ سال کبیسه، ده سال بعد ممکن است وجود نداشته باشد؛ روز به آخرین
+    # روزِ همان ماه چفت می‌شود. (همان قاعده در FieldDeriver::addJalaliYears)
+    while True:
 
-        random.randint(1, 28)
+        try:
 
-    )
+            return jdatetime.date(
+
+                year,
+
+                issue_date.month,
+
+                day
+
+            )
+
+        except ValueError:
+
+            day -= 1
 
 
 # -------------------------------------
@@ -393,7 +417,11 @@ def generate_person():
 
         format_date(
 
-            generate_license_expire_date()
+            generate_license_expire_date(
+
+                license_issue_date
+
+            )
 
         ),
 

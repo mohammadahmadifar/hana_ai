@@ -80,7 +80,8 @@
             </div>
         </div>
 
-        <div class="card__foot" id="finishFoot" @class(['hidden' => ! $finished])>
+        {{-- class دوبار نوشته نشود: مرورگر فقط اولی را می‌بیند و «hidden» بی‌اثر می‌ماند. --}}
+        <div id="finishFoot" @class(['card__foot', 'hidden' => ! $finished])>
             <span class="small muted">
                 @if ($batch->finished_at)
                     پایان در <x-jdate :value="$batch->finished_at" time />.

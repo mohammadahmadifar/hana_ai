@@ -175,6 +175,17 @@ def cmd_image_quality(payload):
     return image_quality(payload.get("path"))
 
 
+def cmd_evaluate_batch(payload):
+    """ساخت + OCR چند مدرک در یک فراخوانی و چند هسته (تسک ۷۲۶)."""
+    from .evaluate import evaluate_batch
+
+    return evaluate_batch(
+        items=payload.get("items"),
+        out_dir=payload.get("out_dir"),
+        workers=payload.get("workers"),
+    )
+
+
 COMMANDS = {
     "version": cmd_version,
     "generate_person": cmd_generate_person,
@@ -182,6 +193,7 @@ COMMANDS = {
     "render_document": cmd_render_document,
     "ocr_document": cmd_ocr_document,
     "image_quality": cmd_image_quality,
+    "evaluate_batch": cmd_evaluate_batch,
 }
 
 

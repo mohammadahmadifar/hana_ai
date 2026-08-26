@@ -195,7 +195,10 @@ class ReportController extends Controller
                 "SUM(CASE WHEN source = 'ocr' AND confidence < ? THEN 1 ELSE 0 END) AS low_samples",
                 [$lowConfidence],
             )
-            ->selectRaw("SUM(CASE WHEN source <> 'ocr' OR corrected_at IS NOT NULL THEN 1 ELSE 0 END) AS corrected_samples")
+            // «اصلاح دستی» یعنی کارشناس دست برده، نه هر ردیفی که OCR نیست:
+            // از تسک ۷۲۵ ردیف‌های `derived` هم هستند (تاریخ انقضای محاسبه‌شده)
+            // و شمردنشان به‌عنوان اصلاح، این ستون را دروغ می‌کرد.
+            ->selectRaw("SUM(CASE WHEN source = 'manual' OR corrected_at IS NOT NULL THEN 1 ELSE 0 END) AS corrected_samples")
             ->groupBy('field_key')
             // فیلدی که هیچ خواندن OCR ندارد میانگینش NULL است؛ نباید بالای
             // فهرست «ضعیف‌ترین» بنشیند، چون داده‌ای دربارهٔ آن نداریم.

@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CaseDocument;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\Response;
@@ -32,9 +34,11 @@ class MediaController extends Controller
      * حساس‌ترین دادهٔ سامانه است و باید همان نقش‌هایی ببینندش که پرونده بررسی
      * می‌کنند.
      *
-     * عمداً «مالکیت» بررسی نمی‌شود: کارشناس بررسی باید پروندهٔ دیگران را باز
+     * نقش، سقف نیست بلکه کف است: کارشناس بررسی باید پروندهٔ دیگران را هم باز
      * کند (تسک ۶۳۵ صف بررسی انسانی است)، پس محدود کردن به پروندهٔ خودِ کاربر
-     * صفحهٔ بررسی را می‌شکست. مرز واقعیِ این سامانه نقش است، نه مالکیت.
+     * صفحهٔ بررسی را می‌شکست. ولی «متقاضی» که نقشش این اجازه را نمی‌دهد باید
+     * مدرکِ پروندهٔ خودش را ببیند، وگرنه صفحهٔ نتیجهٔ خودش تصویر ندارد — آن
+     * حالت با ownsFile() به‌شکل مالکیت باز می‌شود، نه با نقش.
      */
     private const DISK_GUARD = [
         'documents' => 'canReviewCases',
@@ -53,8 +57,12 @@ class MediaController extends Controller
 
         $guard = self::DISK_GUARD[$disk] ?? null;
 
-        if ($guard !== null) {
-            abort_unless((bool) $request->user()?->{$guard}(), 403, 'نقش شما اجازهٔ دیدن این فایل را ندارد.');
+        if ($guard !== null && ! (bool) $request->user()?->{$guard}()) {
+            abort_unless(
+                $this->ownsFile($request, $disk, $path),
+                403,
+                'نقش شما اجازهٔ دیدن این فایل را ندارد.',
+            );
         }
 
         // جلوگیری از پیمایش مسیر: هیچ «..» و هیچ مسیر مطلقی پذیرفته نمی‌شود
@@ -85,6 +93,28 @@ class MediaController extends Controller
         return $storage->response($path, null, [
             'Cache-Control' => 'private, max-age=600',
         ]);
+    }
+
+    /**
+     * آیا این فایل مدرکِ پروندهٔ خودِ همین کاربر است؟
+     *
+     * فقط برای دیسک documents معنا دارد. تطبیق روی همان مسیری است که در ردیف
+     * case_documents ذخیره شده — نه با تجزیهٔ رشتهٔ مسیر — تا اگر روزی قرارداد
+     * نام‌گذاری فایل عوض شد، این نگهبان بی‌سروصدا باز نشود.
+     */
+    private function ownsFile(Request $request, string $disk, string $path): bool
+    {
+        $userId = $request->user()?->id;
+
+        if ($disk !== 'documents' || $userId === null) {
+            return false;
+        }
+
+        return CaseDocument::query()
+            ->where('disk', $disk)
+            ->where('path', $path)
+            ->whereHas('permitCase', fn (Builder $query) => $query->where('user_id', $userId))
+            ->exists();
     }
 
     /** عرض درخواستی، فقط اگر در فهرست مجاز باشد. */

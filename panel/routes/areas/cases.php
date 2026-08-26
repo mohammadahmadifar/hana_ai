@@ -5,6 +5,7 @@
 
 use App\Http\Controllers\Cases\CaseController;
 use App\Http\Controllers\Cases\CaseDocumentController;
+use App\Http\Controllers\Cases\CaseFromTestImageController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -14,21 +15,35 @@ use Illuminate\Support\Facades\Route;
 | مدارک لازم از دیتابیس می‌آید (service_type_document_type)، نه از ویو؛
 | پس صدور سه مدرک می‌خواهد و تمدید چهارتا، بدون هیچ شرط هاردکدی.
 |
-| دسترسی: مدیر سامانه و کارشناس بررسی. مالکیت پرونده داخل کنترلر بررسی
-| می‌شود (هر کس فقط پرونده‌های خودش را می‌بیند، مدیر سامانه همه را).
+| دسترسی: مدیر سامانه، کارشناس بررسی و متقاضی. مالکیت پرونده داخل کنترلر
+| بررسی می‌شود (هر کس فقط پرونده‌های خودش را می‌بیند، مدیر سامانه همه را) —
+| پس متقاضی با همین گروه هم فقط پروندهٔ خودش را باز می‌کند.
+|
+| استثنا: «از تصویر تستی» زیرگروه خودش را دارد و متقاضی داخلش نیست، چون
+| متقاضی اصلاً تصویر تستی نمی‌سازد.
 |
 | نام روت‌ها با آنچه config/panel_menu.php رزرو کرده یکی است:
 |   cases.create ، cases.index  (و cases.show/cases.review مال تسک ۶۳۵ است
 |   و در routes/areas/cases_review.php ثبت می‌شود — این‌جا ثبت نمی‌شوند).
 */
 
-Route::middleware(['auth', 'role:admin,expert'])
+Route::middleware(['auth', 'role:admin,expert,applicant'])
     ->prefix('cases')
     ->name('cases.')
     ->group(function (): void {
 
         // مسیر ثابت پیش از مسیر پارامتری می‌آید تا «new» با شناسه اشتباه نشود
         Route::get('/new', [CaseController::class, 'create'])->name('create');
+
+        // «بفرست به فرایند بررسی» صفحهٔ تصویر تستی (تسک ۶۲۷): پروندهٔ پیش‌نویس
+        // تازه با همان تصویر به‌عنوان مدرک. روتش این‌جاست نه در testimage.php،
+        // چون کاری که می‌کند ساختِ پرونده است — ولی برخلاف بقیهٔ این گروه
+        // متقاضی را راه نمی‌دهد، چون متقاضی به بخش تصویر تستی دسترسی ندارد.
+        // (کارشناس داده هم پرونده نمی‌سازد، هرچند تصویر تستی می‌سازد.)
+        Route::middleware('role:admin,expert')->group(function (): void {
+            Route::post('/from-test-image/{testImage}', [CaseFromTestImageController::class, 'store'])
+                ->whereNumber('testImage')->name('fromTestImage');
+        });
 
         Route::get('/', [CaseController::class, 'index'])->name('index');
         Route::post('/', [CaseController::class, 'store'])->name('store');

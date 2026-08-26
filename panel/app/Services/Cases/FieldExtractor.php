@@ -45,6 +45,8 @@ use App\Support\PersianValue;
  */
 final class FieldExtractor
 {
+    public function __construct(private readonly FieldDeriver $deriver = new FieldDeriver) {}
+
     /** پایهٔ اطمینان بر پایهٔ منبع مقدار. */
     private const FROM_ENGINE_EXTRA = 60.0;
 
@@ -163,6 +165,17 @@ final class FieldExtractor
                 ->whereNotIn('field_key', $touched)
                 ->delete();
         }
+
+        // فیلدی که روی مدرک چاپ نشده ولی از روی فیلدِ چاپ‌شده معلوم است — امروز
+        // فقط تاریخ انقضای گواهینامه (تسک ۷۲۵). بعد از پاک‌سازی بالا صدا زده
+        // می‌شود، وگرنه مقدار محاسبه‌شده روی ردیف تازه‌ای می‌نشست که همان لحظه
+        // پاک می‌شد. ردیف‌های `derived` را آن پاک‌سازی نمی‌برد (شرطش source=ocr).
+        //
+        // عمداً در $written شمرده نمی‌شود: خروجی این متد «چند فیلد از این مدرک
+        // خوانده شد» است و لاگ پایپ‌لاین همان را گزارش می‌کند. مقدار محاسبه‌شده
+        // خوانده نشده، و شمردنش یعنی اجرای OCRای که هیچ‌چیز نخوانده «۱ فیلد»
+        // گزارش کند.
+        $this->deriver->derive($document);
 
         return $written;
     }

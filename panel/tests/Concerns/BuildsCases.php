@@ -54,6 +54,11 @@ trait BuildsCases
         return $this->userWithRole('data');
     }
 
+    protected function applicantUser(): User
+    {
+        return $this->userWithRole('applicant');
+    }
+
     /**
      * کاربر آزمایشی با نقش مشخص.
      *
@@ -65,7 +70,7 @@ trait BuildsCases
      *      کاربر را «غیرفعال» می‌بیند و بیرون می‌اندازد.
      * پس نقش و فعال‌بودن صریح نوشته و مدل تازه‌سازی می‌شود.
      *
-     * @param  'admin'|'expert'|'data'  $role
+     * @param  'admin'|'expert'|'data'|'applicant'  $role
      */
     protected function userWithRole(string $role): User
     {

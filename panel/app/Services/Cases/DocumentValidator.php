@@ -396,6 +396,9 @@ final class DocumentValidator
                 'is_expiry' => $isExpiry,
                 'value' => $value?->display(),
                 'confidence' => $value ? round($value->confidence, 2) : null,
+                // تاریخی که روی مدرک چاپ نشده و محاسبه شده است (تسک ۷۲۵)؛ پیام
+                // باید این را بگوید وگرنه متقاضی دنبال تاریخی می‌گردد که ندارد.
+                'derived' => (bool) $value?->isDerived(),
             ];
 
             if ($value === null) {
@@ -460,26 +463,47 @@ final class DocumentValidator
             if ($trusted !== []) {
                 return $this->row('document', $ruleKey, 'failed',
                     'مدرک «'.$document->label().'» منقضی شده است: «'.$first['label'].'» برابر '
-                    .$first['value'].' است و امروز '.$todayText.' است.',
+                    .$first['value'].' است و امروز '.$todayText.' است.'
+                    .$this->derivedNote($first),
                     $details, $document);
             }
 
             return $this->row('document', $ruleKey, 'warning',
                 'به‌نظر می‌رسد «'.$document->label().'» منقضی شده باشد («'.$first['label'].'»: '.$first['value']
-                .' در برابر امروز '.$todayText.')، ولی این تاریخ با اطمینان پایین خوانده شده؛ کارشناس تاریخ را ببیند.',
+                .' در برابر امروز '.$todayText.')، ولی این تاریخ با اطمینان پایین خوانده شده؛ کارشناس تاریخ را ببیند.'
+                .$this->derivedNote($first),
                 $details, $document);
         }
 
         if ($valid !== []) {
             return $this->row('document', $ruleKey, 'passed',
                 'مدرک «'.$document->label().'» تا '.$valid[0]['value'].' معتبر است ('
-                .$valid[0]['label'].'؛ امروز '.$todayText.').',
+                .$valid[0]['label'].'؛ امروز '.$todayText.').'
+                .$this->derivedNote($valid[0]),
                 $details, $document);
         }
 
         return $this->row('document', $ruleKey, 'skipped',
             'تاریخ انقضای «'.$document->label().'» خوانده نشد؛ اعتبار زمانی این مدرک بررسی نشد.',
             $details, $document);
+    }
+
+    /**
+     * جملهٔ «این تاریخ روی مدرک نیست و محاسبه شده».
+     *
+     * بدون این جمله، پیام «گواهینامه منقضی شده: تاریخ انقضا ۱۳۹۵/۰۴/۱۲» متقاضی
+     * را دنبال تاریخی می‌فرستد که روی کارتش چاپ نشده است.
+     *
+     * @param  array<string, mixed>  $entry
+     */
+    private function derivedNote(array $entry): string
+    {
+        if (($entry['derived'] ?? false) !== true) {
+            return '';
+        }
+
+        return ' این تاریخ روی مدرک چاپ نشده و از روی تاریخ صدور به‌علاوهٔ '
+            .$this->num(FieldDeriver::LICENSE_VALIDITY_YEARS).' سال محاسبه شده است.';
     }
 
     /**

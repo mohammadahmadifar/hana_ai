@@ -2,6 +2,7 @@
 
 namespace App\Services\Cases\Validation;
 
+use App\Services\Cases\FieldDeriver;
 use App\Support\PersianValue;
 
 /**
@@ -52,7 +53,7 @@ final class FieldValue
             $valueType,
             PersianValue::forEngine($valueType, $rawValue),
             max(0.0, min(100.0, $confidence)),
-            $source === 'manual' ? 'manual' : 'ocr',
+            self::normalizeSource($source),
             [$fieldKey],
         );
     }
@@ -82,9 +83,43 @@ final class FieldValue
                 $parts,
             ))),
             min(array_map(static fn (self $p): float => $p->confidence, $parts)),
-            in_array('ocr', array_map(static fn (self $p): string => $p->source, $parts), true) ? 'ocr' : 'manual',
+            // ضعیف‌ترین منبعِ اجزا حرف آخر را می‌زند؛ یک تکهٔ خوانده‌شده کل
+            // مقدار را «خوانده‌شده» می‌کند، حتی اگر بقیه دست‌نویس باشند.
+            self::weakestSource(array_map(static fn (self $p): string => $p->source, $parts)),
             array_merge(...array_map(static fn (self $p): array => $p->partKeys, $parts)),
         );
+    }
+
+    /**
+     * سه منبع ممکن، به ترتیب قطعیت: دست‌نویس کارشناس، محاسبه‌شده، خوانده‌شدهٔ موتور.
+     *
+     * `derived` (تسک ۷۲۵) مقداری است که روی مدرک چاپ نشده ولی از روی فیلدِ
+     * چاپ‌شده قانوناً درمی‌آید — تاریخ انقضای گواهینامه = تاریخ صدور + ۱۰ سال.
+     * جدا نگه داشتنش از `ocr` لازم است چون پیام اعتبارسنجی باید بگوید این تاریخ
+     * **محاسبه شده**، وگرنه متقاضی دنبال تاریخی می‌گردد که روی کارتش نیست.
+     */
+    private static function normalizeSource(string $source): string
+    {
+        return match ($source) {
+            'manual' => 'manual',
+            FieldDeriver::SOURCE => FieldDeriver::SOURCE,
+            default => 'ocr',
+        };
+    }
+
+    /** @param  list<string>  $sources */
+    private static function weakestSource(array $sources): string
+    {
+        if (in_array('ocr', $sources, true)) {
+            return 'ocr';
+        }
+
+        return in_array(FieldDeriver::SOURCE, $sources, true) ? FieldDeriver::SOURCE : 'manual';
+    }
+
+    public function isDerived(): bool
+    {
+        return $this->source === FieldDeriver::SOURCE;
     }
 
     public function isEmpty(): bool

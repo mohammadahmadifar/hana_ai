@@ -6,6 +6,7 @@ use App\Models\DatasetSample;
 use App\Models\PermitCase;
 use App\Models\Setting;
 use App\Models\TestImage;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -24,11 +25,19 @@ use Illuminate\View\View;
  * خوانده می‌شود که اجازه بررسی پرونده دارند. نقش «کارشناس داده» کل گروه
  * «درخواست خدمت» را در منو نمی‌بیند، پس نباید در داشبورد هم ببیند؛ به‌جایش
  * صف تگ‌گذاری دیتاست برایش نمایش داده می‌شود.
+ *
+ * نقش «متقاضی» صفحهٔ دیگری می‌گیرد (dashboard.applicant) و نه شاخهٔ دیگری از
+ * همین صفحه. دلیلش این است که هر عددِ این داشبورد سراسری است — «کل پرونده‌ها»،
+ * «میانگین امتیاز»، «توزیع وضعیت» — و برای متقاضی هم بی‌معناست هم افشای حجم
+ * کار سامانه. صفحهٔ او فقط پرونده‌های خودش را می‌شمارد.
  */
 class DashboardController extends Controller
 {
     /** چند پرونده در جدول «صف بررسی انسانی» نشان داده شود. */
     public const REVIEW_QUEUE_SIZE = 8;
+
+    /** چند پروندهٔ آخرِ خودِ متقاضی روی داشبورد او فهرست شود. */
+    public const APPLICANT_CASE_ROWS = 10;
 
     /**
      * سقف ردیف‌هایی که برای رتبه‌بندی فوریت از دیتابیس خوانده می‌شوند.
@@ -73,6 +82,11 @@ class DashboardController extends Controller
     public function index(Request $request): View
     {
         $user = $request->user();
+
+        if ($user?->isApplicant()) {
+            return $this->applicantDashboard($user);
+        }
+
         $canReviewCases = (bool) $user?->canReviewCases();
         $canManageDataset = (bool) $user?->canManageDataset();
 
@@ -144,6 +158,43 @@ class DashboardController extends Controller
             'canManageDataset' => $canManageDataset,
             'pendingSamples' => $pendingSamples,
             'pendingSamplesTotal' => $pendingSamplesTotal,
+        ]);
+    }
+
+    /**
+     * داشبورد متقاضی — فقط پرونده‌های خودش.
+     *
+     * هیچ کوئری سراسری این‌جا اجرا نمی‌شود: همهٔ شمارش‌ها روی user_id همین
+     * کاربر بسته‌اند، پس نه عدد پرونده‌های دیگران درز می‌کند نه اسمشان.
+     */
+    private function applicantDashboard(User $user): View
+    {
+        $mine = PermitCase::query()->where('user_id', $user->id);
+
+        $rawStatusCounts = (clone $mine)
+            ->selectRaw('status, COUNT(*) AS total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
+        $statusCounts = collect(PermitCase::STATUSES)
+            ->map(fn ($label, $key) => (int) ($rawStatusCounts[$key] ?? 0));
+
+        $cases = (clone $mine)
+            ->with(['serviceType:id,label_fa'])
+            ->latest('id')
+            ->limit(self::APPLICANT_CASE_ROWS)
+            ->get();
+
+        return view('dashboard.applicant', [
+            'user' => $user,
+            'cases' => $cases,
+            'statusCounts' => $statusCounts,
+            'casesTotal' => (clone $mine)->count(),
+            // «در جریان» یعنی هر چیزی که هنوز تصمیم نهایی نگرفته — همان سه
+            // وضعیتی که متقاضی باید منتظرشان بماند.
+            'inProgress' => (int) $statusCounts->get('submitted', 0)
+                + (int) $statusCounts->get('processing', 0)
+                + (int) $statusCounts->get('needs_review', 0),
         ]);
     }
 
