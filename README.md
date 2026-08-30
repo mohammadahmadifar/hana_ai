@@ -41,303 +41,111 @@
 
 ---
 
-## پیش‌نیازها
+## نصب و اجرا
 
-راهنمای زیر برای **لینوکس (اوبونتو یا دبیان)** نوشته شده و روی
-Debian 13 آزمایش شده است. اگر ویندوز دارید، ساده‌ترین راه نصب
-[WSL](https://learn.microsoft.com/windows/wsl/install) و اجرای همین
-دستورها داخل آن است.
+همه‌چیز داخل داکر است: PHP، پایتون، Tesseract، MariaDB و Redis. روی
+ویندوز، لینوکس یا مک هیچ‌کدام را جداگانه نصب نمی‌کنید.
 
-| چیز | نسخهٔ آزمایش‌شده | برای چه |
-|---|---|---|
-| PHP | ۸.۴ (حداقل ۸.۳) | پنل لاراول |
-| Composer | ۲.x | نصب کتابخانه‌های PHP |
-| MariaDB یا MySQL | MariaDB 11.8 | پایگاه دادهٔ پنل |
-| Redis | ۸.۰ | صف کارهای سنگین، نشست، کش |
-| Python | ۳.۱۳ (حداقل ۳.۱۰) | موتور OCR |
-| Tesseract OCR | ۵.۵ + دیتای `fas` و `eng` | خواندن متن فارسی از تصویر |
+### پیش‌نیاز — فقط دو چیز
 
-**نیازی به Node.js و npm نیست.** پنل ساخت فرانت ندارد؛ یک فایل CSS
-دست‌نویس در `panel/public/assets/app.css` دارد و بس.
+| چیز | از کجا |
+|---|---|
+| **Docker Desktop** (ویندوز و مک) یا Docker Engine (لینوکس) | <https://www.docker.com/products/docker-desktop> |
+| **Git for Windows** — چون اسکریپت نصب bash می‌خواهد (روی لینوکس و مک لازم نیست) | <https://git-scm.com/download/win> |
 
----
+روی ویندوز، اول Docker Desktop را باز کنید و منتظر بمانید تا پایین پنجره
+بنویسد **Engine running**.
 
-## نصب گام‌به‌گام
-
-### گام ۱ — نصب بسته‌های سیستمی
-
-```bash
-sudo apt update
-sudo apt install -y \
-  git curl unzip \
-  mariadb-server redis-server nginx \
-  python3 python3-venv python3-pip \
-  tesseract-ocr tesseract-ocr-fas tesseract-ocr-eng
-```
-
-حالا PHP. روی اوبونتو/دبیان معمولاً نسخهٔ ۸.۴ در مخزن پیش‌فرض نیست، پس
-اول مخزن Sury/Ondřej را اضافه کنید:
-
-```bash
-# دبیان
-sudo apt install -y ca-certificates lsb-release
-curl -fsSL https://packages.sury.org/php/apt.gpg | sudo tee /usr/share/keyrings/sury-php.gpg > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" \
-  | sudo tee /etc/apt/sources.list.d/sury-php.list
-
-# اوبونتو (به‌جای دو خط بالا)
-# sudo add-apt-repository ppa:ondrej/php && sudo apt update
-
-sudo apt update
-sudo apt install -y \
-  php8.4-cli php8.4-fpm php8.4-mysql php8.4-redis \
-  php8.4-mbstring php8.4-xml php8.4-curl php8.4-zip \
-  php8.4-gd php8.4-intl php8.4-bcmath php8.4-sqlite3
-```
-
-و Composer:
-
-```bash
-curl -sS https://getcomposer.org/installer | php
-sudo mv composer.phar /usr/local/bin/composer
-```
-
-**بررسی گام ۱** — هر چهار دستور باید نسخه چاپ کنند:
-
-```bash
-php -v && composer --version && python3 --version && tesseract --version
-tesseract --list-langs        # باید eng و fas را ببینید
-```
-
-اگر `fas` در فهرست نبود، OCR فارسی کار نمی‌کند؛ بسته‌اش را دوباره نصب کنید.
-
----
-
-### گام ۲ — گرفتن کد
+### نصب
 
 ```bash
 git clone https://github.com/mohammadahmadifar/hana_ai.git
 cd hana_ai
+bash install.sh
 ```
 
-از این‌جا به بعد، همهٔ دستورها از داخل همین پوشه اجرا می‌شوند. مسیر کامل
-این پوشه را یادداشت کنید — در گام ۵ لازمش دارید:
+روی ویندوز پوشه را در **Git Bash** باز کنید (راست‌کلیک داخل پوشه ← Open
+Git Bash here) و همان `bash install.sh` را بزنید. اگر پاورشل را ترجیح
+می‌دهید:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+`install.ps1` خودش Git Bash یا WSL را پیدا می‌کند و همان `install.sh` را
+اجرا می‌کند؛ منطق نصب یک‌جاست.
+
+اسکریپت این کارها را می‌کند:
+
+1. بررسی می‌کند داکر نصب و روشن باشد.
+2. فایل `.env` را از روی `.env.docker.example` می‌سازد و **رمز پایگاه
+   داده، رمز حساب‌های نمونه و کلید برنامه را تصادفی پر می‌کند**.
+3. ایمیج را می‌سازد — دبیان ۱۳، PHP ۸.۴، پایتون ۳.۱۳، Tesseract ۵ با
+   دیتای فارسی و انگلیسی، کتابخانه‌های موتور و vendor پنل.
+4. پنج سرویس را بالا می‌آورد: `db`، `redis`، `app`، `worker`، `scheduler`.
+5. جدول‌ها را می‌سازد و دادهٔ اولیه و چهار حساب نمونه را وارد می‌کند.
+6. آخر کار `hana:engine-check` را اجرا می‌کند: یک تصویر واقعی می‌سازد و
+   رویش OCR می‌زند تا مطمئن شوید زنجیرهٔ پنل ← پایتون ← Tesseract کار
+   می‌کند.
+
+بار اول چند دقیقه طول می‌کشد (چند صد مگابایت دانلود). آخرش آدرس پنل و
+رمز ورود را چاپ می‌کند:
+
+```
+آدرس پنل      http://localhost:8101
+```
+
+### گزینه‌ها
 
 ```bash
-pwd     # مثلاً: /home/ali/hana_ai
+bash install.sh --port 9000    # پنل روی پورت دیگری
+bash install.sh                # بعد از تغییر کد: دوباره می‌سازد و بالا می‌آورد
+bash install.sh --rebuild      # ساخت ایمیج از صفر و بدون کش
+bash install.sh --fresh        # پاک کردن کامل داده‌ها و نصب از نو (می‌پرسد)
+bash install.sh --no-verify    # بدون تست پایانی موتور
 ```
 
----
-
-### گام ۳ — موتور پایتون
-
-یک محیط مجازی می‌سازیم تا کتابخانه‌های پروژه با پایتون سیستم قاطی نشوند:
+### دستورهای روزمره
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install -r requirements.txt
+docker compose ps                # وضعیت پنج سرویس
+docker compose logs -f app       # لاگ پنل
+docker compose logs -f worker    # لاگ کارگر صف
+docker compose stop              # خاموش کردن (داده‌ها می‌مانند)
+docker compose up -d             # روشن کردن دوباره
 ```
 
-> روی سروری که کارت گرافیک و محیط گرافیکی ندارد، اگر نصب `opencv-python`
-> خطا داد، به‌جایش نسخهٔ سبک را نصب کنید:
-> `.venv/bin/pip install opencv-python-headless`
+> کارگر صف (`worker`) و زمان‌بند (`scheduler`) سرویس جدا دارند و خودشان
+> بالا می‌آیند. **بدون کارگر صف، پرونده برای همیشه در وضعیت «در حال
+> پردازش» می‌ماند** — این همان چیزی است که در نصب دستی همه جا می‌انداختند.
 
-**بررسی گام ۳** — موتور باید بتواند یک شخص مصنوعی بسازد:
+### تنظیمات
+
+هرچه قابل تغییر است در فایل `.env` کنار `docker-compose.yml` نشسته: پورت،
+رمزها، سقف زمان موتور، تعداد هستهٔ «ارزیابی دقت». بعد از هر تغییر:
 
 ```bash
-.venv/bin/python -c "from app.person.person_generator import generate_person; print(generate_person()['national_id'])"
+docker compose up -d
 ```
 
-اگر یک کد ملی ده‌رقمی چاپ شد، موتور سر جایش است.
+فایل `panel/.env` را دست نزنید؛ ظرف در هر بالا آمدن از روی همین `.env`
+بازنویسی‌اش می‌کند.
 
----
+> 🔑 فایل `.env` رمز پایگاه داده و کلید برنامه را دارد و در `.gitignore`
+> است. جایی کپی‌اش نکنید و در گیت نگذاریدش.
 
-### گام ۴ — پایگاه داده
+### داده‌ها کجا می‌مانند
 
-سرویس‌ها را روشن کنید و یک پایگاه داده و کاربر برای پنل بسازید:
+روی ولوم‌های داکر، پس با `docker compose down` یا ری‌استارت ویندوز پاک
+نمی‌شوند:
 
-```bash
-sudo systemctl enable --now mariadb redis-server
-```
+| ولوم | چه دارد |
+|---|---|
+| `db_data` | پایگاه دادهٔ پنل |
+| `panel_storage` | مدارک بارگذاری‌شده، لاگ‌ها، کلید برنامه |
+| `dataset_*` | خروجی پایپ‌لاین موتور (تصویر تولیدشده، OCR، لیبل) |
 
-```bash
-sudo mariadb <<'SQL'
-CREATE DATABASE IF NOT EXISTS hana CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'hana'@'127.0.0.1' IDENTIFIED BY 'CHANGE_ME';
-GRANT ALL PRIVILEGES ON hana.* TO 'hana'@'127.0.0.1';
-FLUSH PRIVILEGES;
-SQL
-```
-
-`CHANGE_ME` را با یک رمز قوی عوض کنید — بدون فاصله و بدون کاراکتر فارسی —
-و همان را در گام بعد در فایل `.env` بنویسید. یادداشتش کنید؛ دوباره لازمش
-دارید.
-
-**بررسی گام ۴:**
-
-```bash
-mariadb -h 127.0.0.1 -u hana -p hana -e "SELECT 'اتصال برقرار است';"
-redis-cli ping        # باید PONG بدهد
-```
-
----
-
-### گام ۵ — پنل لاراول
-
-```bash
-cd panel
-composer install
-cp .env.example .env
-php artisan key:generate
-```
-
-> ⚠️ دستور `composer setup` را اجرا **نکنید**. آن اسکریپت از قالب پیش‌فرض
-> لاراول مانده و `npm` را صدا می‌زند؛ این پروژه ساخت فرانت ندارد.
-
-حالا فایل `panel/.env` را با یک ویرایشگر متن باز کنید و این چند خط را پر
-کنید (بقیهٔ خط‌ها را دست نزنید):
-
-```ini
-# همان رمزی که در گام ۴ برای کاربر hana گذاشتید
-DB_PASSWORD=CHANGE_ME
-
-# مسیر کامل پوشهٔ hana_ai که در گام ۲ یادداشت کردید
-HANA_ENGINE_ROOT=/home/ali/hana_ai
-HANA_ENGINE_PYTHON=/home/ali/hana_ai/.venv/bin/python
-
-# رمزی که برای حساب‌های نمونه گذاشته می‌شود (با همین وارد پنل می‌شوید)
-SEED_PASSWORD=CHANGE_ME_TOO
-```
-
-> مقدارها را بدون فاصله بنویسید. اگر رمزتان فاصله دارد، داخل گیومه
-> بگذاریدش: `DB_PASSWORD="my secret pass"`.
-
-سپس جدول‌ها و دادهٔ اولیه را بسازید:
-
-```bash
-php artisan migrate --force
-php artisan db:seed --force
-```
-
-`migrate` جدول‌ها را می‌سازد و `db:seed` دادهٔ مرجع (انواع مدرک، انواع
-خدمت، آستانه‌های امتیازدهی) به‌علاوهٔ چهار حساب نمونه را وارد می‌کند.
-
----
-
-### گام ۶ — مجوز پوشه‌ها
-
-مدارک بارگذاری‌شده در `panel/storage` می‌نشینند و وب‌سرور باید بتواند در
-آن‌ها بنویسد:
-
-```bash
-cd ..                                   # برگردید به ریشهٔ hana_ai
-sudo chown -R www-data:www-data panel/storage panel/bootstrap/cache
-sudo chmod -R 775 panel/storage panel/bootstrap/cache
-```
-
-> 🪤 **تلهٔ رایج:** اگر دستورهای `php artisan` را با `sudo` اجرا کنید،
-> پوشه‌های تازه با مالکیت `root` ساخته می‌شوند و بارگذاری فایل از رابط وب
-> بی‌صدا می‌شکند. دستورهای artisan را با کاربر عادی اجرا کنید، و اگر یک بار
-> با `sudo` اجرا کردید، همین دو دستور بالا را دوباره بزنید.
-
----
-
-### گام ۷ — بالا آوردن پنل
-
-**راه ساده (برای دیدن و آزمایش):**
-
-```bash
-cd panel
-php artisan serve --host=127.0.0.1 --port=8101
-```
-
-پنل روی <http://127.0.0.1:8101> باز می‌شود. این پنجرهٔ ترمینال باید باز
-بماند.
-
-**راه اصلی (nginx — برای استفادهٔ واقعی):**
-
-فایل `/etc/nginx/sites-available/hana-panel` را بسازید:
-
-```nginx
-server {
-    listen 8101;
-    server_name _;
-
-    root /home/ali/hana_ai/panel/public;   # ← مسیر خودتان
-    index index.php;
-    charset utf-8;
-
-    client_max_body_size 60m;              # مدارک اسکن‌شده بزرگ‌اند
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location ~ \.php$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        fastcgi_read_timeout 300;          # OCR طول می‌کشد
-    }
-
-    location ~ /\.(?!well-known).* { deny all; }
-}
-```
-
-و فعالش کنید:
-
-```bash
-sudo ln -s /etc/nginx/sites-available/hana-panel /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-sudo systemctl enable --now php8.4-fpm
-```
-
----
-
-### گام ۸ — کارگر صف (این یکی را جا نیندازید)
-
-کارهای سنگین — OCR، تولید انبوه تصویر، ارزیابی دقت — داخل صف اجرا
-می‌شوند. **بدون کارگر صف، پرونده برای همیشه در وضعیت «در حال پردازش»
-می‌ماند** و هیچ پیام خطایی هم نمی‌بینید.
-
-```bash
-cd panel
-nohup bash scripts/queue-worker.sh > storage/logs/queue.log 2>&1 &
-```
-
-بررسی اینکه روشن است:
-
-```bash
-pgrep -af "artisan queue:work" | head
-```
-
-برای خاموش کردنش:
-
-```bash
-pkill -f "artisan queue:work.*hana"
-```
-
-> 🪤 **تلهٔ رایج:** کارگر صف کد را در حافظه نگه می‌دارد. اگر کد PHP را عوض
-> کردید، کارگر را دوباره راه بیندازید، وگرنه با خطای عجیبی مثل
-> «Call to undefined method» می‌ترکد در حالی که فایل روی دیسک درست است.
-
----
-
-### گام ۹ — زمان‌بندی روزانه (اختیاری ولی توصیه‌شده)
-
-تصویرهای موقتی موتور اگر پاک نشوند روی دیسک تلنبار می‌شوند — و محتوایشان
-تصویر مدرک است، پس ماندنشان فقط مسئلهٔ فضا نیست. یک خط به cron اضافه کنید:
-
-```bash
-crontab -e
-```
-
-و این خط را بنویسید (مسیر را با مسیر خودتان عوض کنید):
-
-```cron
-* * * * * cd /home/ali/hana_ai/panel && php artisan schedule:run >> /dev/null 2>&1
-```
+فقط `docker compose down --volumes` (یا `install.sh --fresh`) پاکشان می‌کند.
 
 ---
 
@@ -345,9 +153,13 @@ crontab -e
 
 **نام کاربری ورود، کد ملی است — نه ایمیل.**
 
-`php artisan db:seed` چهار حساب نمونه می‌سازد، یکی برای هر نقش. رمز هر
-چهار حساب همان چیزی است که در `panel/.env` برای `SEED_PASSWORD` گذاشتید
-(و اگر آن خط را خالی گذاشتید: `hana@1405`).
+نصب، چهار حساب نمونه می‌سازد، یکی برای هر نقش. رمز هر چهار حساب یکی است
+و `install.sh` آن را آخر کار چاپ می‌کند؛ اگر گمش کردید، در فایل `.env`
+کنار `docker-compose.yml` جلوی `SEED_PASSWORD` نوشته شده:
+
+```bash
+grep SEED_PASSWORD .env
+```
 
 | نقش | کد ملی (نام کاربری) | چه می‌بیند |
 |---|---|---|
@@ -370,8 +182,7 @@ crontab -e
 ### ۱) سلامت موتور — مهم‌ترین بررسی
 
 ```bash
-cd panel
-php artisan hana:engine-check
+docker compose exec -u www-data app php /app/panel/artisan hana:engine-check
 ```
 
 این دستور کل زنجیره را از این سر تا آن سر می‌آزماید: پنل → پل موتور →
@@ -385,7 +196,7 @@ INFO  موتور سالم است؛ زنجیرهٔ پنل ← پل ← موتور
 ### ۲) تست‌های خودکار
 
 ```bash
-php artisan test
+docker compose exec -u www-data app php /app/panel/artisan test
 ```
 
 باید همه سبز باشند. این تست‌ها روی پایگاه دادهٔ موقت SQLite اجرا می‌شوند و
@@ -396,7 +207,7 @@ php artisan test
 اگر می‌خواهید بدون بارگذاری دستی مدرک، صفحهٔ نتیجه و صف بررسی را ببینید:
 
 ```bash
-php artisan db:seed --class=DemoCasesSeeder
+docker compose exec -u www-data app php /app/panel/artisan db:seed --force --class=DemoCasesSeeder
 ```
 
 بیست پروندهٔ نمایشی می‌سازد. هر بار که سناریوی «بررسی انسانی» را اجرا
@@ -409,21 +220,23 @@ php artisan db:seed --class=DemoCasesSeeder
 
 | نشانه | علت و راه‌حل |
 |---|---|
-| پرونده برای همیشه «در حال پردازش» می‌ماند | کارگر صف روشن نیست. گام ۸. |
-| بارگذاری فایل خطا می‌دهد یا فایل ذخیره نمی‌شود | مالکیت `panel/storage` با `www-data` نیست. گام ۶. |
-| OCR متن فارسی را نمی‌خواند یا خالی برمی‌گرداند | بستهٔ `tesseract-ocr-fas` نصب نیست. با `tesseract --list-langs` بررسی کنید. |
-| «Call to undefined method» بعد از تغییر کد | کارگر صف نسخهٔ قدیمی کد را در حافظه دارد؛ دوباره راه بیندازیدش. |
-| خطای اتصال به پایگاه داده | `DB_PASSWORD` در `panel/.env` با رمز گام ۴ یکی نیست، یا MariaDB خاموش است. |
-| صفحهٔ سفید یا خطای ۵۰۰ | `php artisan key:generate` را فراموش کرده‌اید، یا `storage/logs/laravel.log` را بخوانید. |
-| موتور پیدا نمی‌شود / خطای پایتون | `HANA_ENGINE_ROOT` و `HANA_ENGINE_PYTHON` در `.env` مسیر واقعی نیستند. |
-| بعد از عوض‌کردن `.env` چیزی تغییر نکرد | `php artisan config:clear` بزنید. |
-| Tesseract در مسیر عجیبی نصب شده | متغیر محیطی `TESSERACT_CMD` را روی مسیر اجرایی آن بگذارید. |
+| `install.sh` می‌گوید سرویس داکر بالا نیست | Docker Desktop باز نیست یا هنوز راه نیفتاده؛ منتظر «Engine running» بمانید. |
+| خطای پورت مشغول است (`port is already allocated`) | چیز دیگری روی ۸۱۰۱ نشسته: `bash install.sh --port 9000`. |
+| ساخت ایمیج وسط دانلود بسته می‌شکند | اتصال اینترنت یا تحریم‌شکن داکر؛ دوباره `bash install.sh` بزنید، از کش ادامه می‌دهد. |
+| پرونده برای همیشه «در حال پردازش» می‌ماند | سرویس `worker` بالا نیست: `docker compose ps` و `docker compose logs worker`. |
+| OCR متن فارسی را نمی‌خواند | بستهٔ زبان فارسی: `docker compose exec app tesseract --list-langs` باید `fas` را نشان دهد. |
+| صفحهٔ سفید یا خطای ۵۰۰ | `docker compose exec app tail -50 /app/panel/storage/logs/laravel.log` |
+| بعد از عوض کردن `.env` چیزی تغییر نکرد | `docker compose up -d` تا ظرف با مقدارهای تازه دوباره ساخته شود. |
+| کد PHP را عوض کردم ولی پنل همان قبلی است | ایمیج باید دوباره ساخته شود: `bash install.sh`. |
+| «Call to undefined method» بعد از تغییر کد | کارگر صف نسخهٔ قدیمی کد را در حافظه دارد: `docker compose restart worker`. |
+| می‌خواهم از صفر شروع کنم | `bash install.sh --fresh` — همهٔ داده‌ها پاک می‌شود. |
 
-لاگ‌ها این‌جا هستند:
+لاگ‌ها:
 
-```
-panel/storage/logs/laravel.log     خطاهای پنل
-panel/storage/logs/queue.log       خروجی کارگر صف
+```bash
+docker compose logs -f app       # پنل (nginx، php-fpm، مهاجرت‌ها)
+docker compose logs -f worker    # کارگر صف — OCR و تولید انبوه
+docker compose exec app tail -f /app/panel/storage/logs/laravel.log
 ```
 
 ---
@@ -434,20 +247,20 @@ panel/storage/logs/queue.log       خروجی کارگر صف
 مستقل از پنل هم اجرا می‌شود:
 
 ```bash
-.venv/bin/python main.py                # یک نمونهٔ تازه بساز و نمونه‌های پردازش‌نشده را پردازش کن
-.venv/bin/python main.py --number 10    # ده شخص تازه بساز و پردازش کن
-.venv/bin/python main.py --all          # پردازش کامل از نو (وقتی الگوریتم عوض شده)
+docker compose exec -u www-data app /opt/venv/bin/python main.py
+docker compose exec -u www-data app /opt/venv/bin/python main.py --number 10
+docker compose exec -u www-data app /opt/venv/bin/python main.py --all
 ```
 
 اندازه‌گیری دقت روی نمونه‌های تازه:
 
 ```bash
-.venv/bin/python scripts/benchmark.py --number 25   # ۲۵ نمونهٔ تازه بساز و همان‌ها را بسنج
-.venv/bin/python scripts/benchmark.py --last 25     # بدون تولید؛ ۲۵ نمونهٔ آخر
+docker compose exec -u www-data app /opt/venv/bin/python scripts/benchmark.py --number 25
+docker compose exec -u www-data app /opt/venv/bin/python scripts/benchmark.py --last 25
 ```
 
-> پوشهٔ `dataset/` در `.gitignore` است، پس روی هر ماشین تازه اول باید نمونه
-> ساخته شود. و **همیشه با نمونهٔ تازه بسنجید**: نمونه‌های قدیمیِ روی دیسک با
+> خروجی‌های `dataset/` در گیت نیستند، پس روی نصب تازه اول باید نمونه ساخته
+> شود (روی ولوم داکر می‌مانند و با ری‌استارت پاک نمی‌شوند). و **همیشه با نمونهٔ تازه بسنجید**: نمونه‌های قدیمیِ روی دیسک با
 > لیبل‌های زمان خودشان مانده‌اند و عدد را چند واحد پایین‌تر نشان می‌دهند.
 
 ---
@@ -464,6 +277,10 @@ hana_ai/
 ├── docs/scenarios/       سناریوهای ویدیویی تست پنل
 ├── main.py               نقطهٔ ورود پایپ‌لاین موتور
 ├── requirements.txt      پیش‌نیازهای پایتون
+├── install.sh            نصب و بالا آوردن کامل با داکر (install.ps1 برای ویندوز)
+├── Dockerfile            ایمیج مشترک پنل و موتور
+├── docker-compose.yml    پنج سرویس: db، redis، app، worker، scheduler
+├── docker/               nginx، php-fpm، supervisord، ورودی ظرف
 └── panel/                پنل لاراول
     ├── app/Services/HanaEngine.php    تنها پل به موتور
     ├── app/Services/Cases/            پنج مرحلهٔ فرایند مجوز

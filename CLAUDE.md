@@ -26,6 +26,23 @@ nohup bash panel/scripts/queue-worker.sh > panel/storage/logs/queue.log 2>&1 &
 پیش‌نیاز سیستمی: `tesseract-ocr` + `tesseract-ocr-fas` + `tesseract-ocr-eng`.
 مسیر اجرایی Tesseract در `app/config/settings.py` خودکار حل می‌شود؛ با `TESSERACT_CMD` قابل بازنویسی است.
 
+## نصب داکری (راه رسمی نصب روی ماشین دیگر — README همین را می‌گوید)
+
+```bash
+bash install.sh        # .env می‌سازد، ایمیج را build می‌کند، پنج سرویس را بالا می‌آورد، engine-check می‌زند
+```
+
+پنج سرویس: `db` (MariaDB)، `redis`، `app` (nginx + php-fpm + موتور)، `worker` (کارگر صف)، `scheduler`.
+هر سه ظرف PHP یک ایمیج‌اند و نقش، آرگومان ENTRYPOINT است (`web` / `worker` / `scheduler` در `docker/entrypoint.sh`).
+
+نکته‌هایی که شکستنشان ساکت است:
+
+- `panel/.env` داخل ظرف در هر بالا آمدن از روی متغیرهای محیطی **بازنویسی می‌شود**؛ منبع حقیقت `.env` کنار `docker-compose.yml` است.
+- `REDIS_PASSWORD` عمداً متغیر محیطی نمی‌شود و فقط داخل `panel/.env` مقدار `null` می‌گیرد: لاراول رشتهٔ «null» را در فایل `.env` به null تبدیل می‌کند ولی در متغیر محیطی واقعی، رشته می‌بیند و با رمزِ «null» به ردیس AUTH می‌زند.
+- `clear_env = no` در `docker/php-fpm-pool.conf` واجب است، وگرنه هیچ‌کدام از متغیرهای `DB_*` به PHP نمی‌رسند.
+- `db:seed` فقط بار اول اجرا می‌شود (نشانهٔ `storage/app/.seeded`)، چون سیدر رمز حساب‌ها را دوباره می‌نویسد. `HANA_SEED=always` این را عوض می‌کند.
+- هر `docker compose exec` روی پنل یا موتور با `-u www-data` زده می‌شود؛ با root، فایل‌های root-owned می‌سازد و آپلود بعدی بی‌صدا می‌شکند.
+
 ## قانون طلایی: پنل هرگز مستقیم به موتور دست نمی‌زند
 
 تنها پل، کلاس `panel/app/Services/HanaEngine.php` است که `python -m hana_engine.cli` را با JSON روی stdin صدا می‌زند و JSON می‌گیرد.

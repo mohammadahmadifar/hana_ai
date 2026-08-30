@@ -1,0 +1,130 @@
+# ==============================================================
+# سرویس‌های «هانا»
+#
+#   db        MariaDB — پایگاه دادهٔ پنل
+#   redis     صف، نشست، کش
+#   app       nginx + php-fpm + موتور پایتون  (پنل روی HANA_PORT)
+#   worker    کارگر صف — OCR و تولید انبوه اینجا اجرا می‌شوند
+#   scheduler زمان‌بند روزانه (پاک‌سازی تصویرهای موقت موتور)
+#
+# app و worker و scheduler یک ایمیج‌اند و فقط آرگومان ورودی‌شان فرق دارد.
+# مقدارها از فایل .env کنار همین فایل خوانده می‌شود؛ اگر نداریدش:
+#   bash install.sh
+# ==============================================================
+
+name: hana
+
+x-hana-service: &hana-service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: hana-ai:latest
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    # این چند تا از .env خوانده نمی‌شوند: داخل شبکهٔ داکر ثابت‌اند.
+    DB_CONNECTION: mysql
+    DB_HOST: db
+    DB_PORT: "3306"
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    APP_URL: http://localhost:${HANA_PORT:-8101}
+    HANA_ENGINE_ROOT: /app
+    HANA_ENGINE_PYTHON: /opt/venv/bin/python
+  volumes:
+    # مدارک بارگذاری‌شده، لاگ‌ها، کلید برنامه
+    - panel_storage:/app/panel/storage
+    # خروجی پایپ‌لاین موتور — با پاک شدن ظرف از بین نرود
+    - dataset_generated:/app/dataset/generated
+    - dataset_processed:/app/dataset/processed
+    - dataset_preprocessed:/app/dataset/preprocessed
+    - dataset_ocr_results:/app/dataset/ocr_results
+    - dataset_labels:/app/dataset/labels
+    - dataset_benchmark:/app/dataset/benchmark
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+
+  db:
+    image: mariadb:11.8
+    restart: unless-stopped
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE:-hana}
+      MARIADB_USER: ${DB_USERNAME:-hana}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?در فایل .env مقدار DB_PASSWORD خالی است — bash install.sh را اجرا کنید}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?در فایل .env مقدار DB_ROOT_PASSWORD خالی است — bash install.sh را اجرا کنید}
+      MARIADB_AUTO_UPGRADE: "1"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    <<: *hana-service
+    command: ["web"]
+    ports:
+      - "${HANA_PORT:-8101}:80"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/up"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  # بدون این سرویس، پرونده برای همیشه در وضعیت «در حال پردازش» می‌ماند
+  worker:
+    <<: *hana-service
+    command: ["worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
+
+  scheduler:
+    <<: *hana-service
+    command: ["scheduler"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
+
+volumes:
+  db_data:
+  redis_data:
+  panel_storage:
+  dataset_generated:
+  dataset_processed:
+  dataset_preprocessed:
+  dataset_ocr_results:
+  dataset_labels:
+  dataset_benchmark:

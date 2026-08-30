@@ -1,0 +1,44 @@
+# ---------------------------------------------
+# چیزهایی که نباید داخل ایمیج بروند
+# ---------------------------------------------
+
+.git
+.gitignore
+.gitattributes
+
+# تنظیمات ماشین توسعه — مسیرها و رمزهایش داخل ظرف غلط‌اند و
+# ورودی ظرف خودش .env تازه می‌نویسد
+.env
+panel/.env
+.env.docker.example
+
+# محیط مجازی و vendor ماشین میزبان؛ داخل ایمیج از نو ساخته می‌شوند
+.venv
+venv
+panel/vendor
+panel/node_modules
+
+# خروجی‌های تولیدشده
+**/__pycache__
+**/*.pyc
+dataset/generated
+dataset/processed
+dataset/preprocessed
+dataset/ocr_results
+dataset/labels
+dataset/benchmark
+debug_segments.png
+**/debug_segments.png
+
+# حالت اجرایی پنل روی ماشین میزبان
+panel/storage
+panel/bootstrap/cache
+panel/.phpunit.result.cache
+panel/public/storage
+
+# مستندات سنگین
+docs/videos
+
+# خود فایل‌های داکر لازم نیستند داخل ایمیج کپی شوند
+install.sh
+install.ps1
